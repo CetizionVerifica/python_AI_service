@@ -1,187 +1,541 @@
-
 {
-	"info": {
-		"_postman_id": "ocr-invoice-collection",
-		"name": "OCR Invoice API",
-		"description": "Collection for OCR Invoice Extraction Service",
-		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
-	},
-	"item": [
-		{
-			"name": "Health Check",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "http://localhost:8000/health",
-					"protocol": "http",
-					"host": ["localhost"],
-					"port": "8000",
-					"path": ["health"]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Upload & Extract Invoice",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "file",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "category",
-							"value": "general",
-							"type": "text"
-						},
-						{
-							"key": "site_id",
-							"value": "",
-							"type": "text",
-							"description": "Optional: site ID"
-						},
-						{
-							"key": "category_id",
-							"value": "",
-							"type": "text",
-							"description": "Optional: category ID"
-						},
-						{
-							"key": "uploaded_by",
-							"value": "",
-							"type": "text",
-							"description": "Optional: user ID"
-						}
-					]
-				},
-				"url": {
-					"raw": "http://localhost:8000/v1/invoices/upload",
-					"protocol": "http",
-					"host": ["localhost"],
-					"port": "8000",
-					"path": ["v1", "invoices", "upload"]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "List Invoices",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "http://localhost:8000/v1/invoices",
-					"protocol": "http",
-					"host": ["localhost"],
-					"port": "8000",
-					"path": ["v1", "invoices"],
-					"query": [
-						{
-							"key": "site_id",
-							"value": "",
-							"description": "Optional: filter by site",
-							"disabled": true
-						},
-						{
-							"key": "category_id",
-							"value": "",
-							"description": "Optional: filter by category",
-							"disabled": true
-						}
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Get Invoice by ID",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "http://localhost:8000/v1/invoices/1",
-					"protocol": "http",
-					"host": ["localhost"],
-					"port": "8000",
-					"path": ["v1", "invoices", "1"]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Delete Invoice",
-			"request": {
-				"method": "DELETE",
-				"header": [],
-				"url": {
-					"raw": "http://localhost:8000/v1/invoices/1",
-					"protocol": "http",
-					"host": ["localhost"],
-					"port": "8000",
-					"path": ["v1", "invoices", "1"]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Bulk Delete Invoices",
-			"request": {
-				"method": "DELETE",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "[1, 2, 3]"
-				},
-				"url": {
-					"raw": "http://localhost:8000/v1/invoices/bulk",
-					"protocol": "http",
-					"host": ["localhost"],
-					"port": "8000",
-					"path": ["v1", "invoices", "bulk"]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "[Legacy] Extract Invoice (No Storage)",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "file",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "category",
-							"value": "general",
-							"type": "text"
-						}
-					]
-				},
-				"url": {
-					"raw": "http://localhost:8000/v1/extract",
-					"protocol": "http",
-					"host": ["localhost"],
-					"port": "8000",
-					"path": ["v1", "extract"]
-				}
-			},
-			"response": []
-		}
-	]
+  "info": {
+    "_postman_id": "9d04f9ae-281c-4f0c-86f2-fb8709723438",
+    "name": "OCR Invoice API",
+    "description": "Collection for OCR Invoice Extraction Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "46908953"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8000/health",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "health"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Health Check",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8000/health",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": null,
+          "header": [
+            {
+              "key": "date",
+              "value": "Mon, 16 Feb 2026 14:08:40 GMT"
+            },
+            {
+              "key": "server",
+              "value": "uvicorn"
+            },
+            {
+              "key": "content-length",
+              "value": "15"
+            },
+            {
+              "key": "content-type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"status\": \"ok\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Upload & Extract Invoice",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "value": null
+            },
+            {
+              "key": "category",
+              "value": "general",
+              "type": "text"
+            },
+            {
+              "key": "site_id",
+              "value": "",
+              "type": "text",
+              "description": "Optional: site ID"
+            },
+            {
+              "key": "category_id",
+              "value": "",
+              "type": "text",
+              "description": "Optional: category ID"
+            },
+            {
+              "key": "uploaded_by",
+              "value": "",
+              "type": "text",
+              "description": "Optional: user ID"
+            }
+          ]
+        },
+        "url": {
+          "raw": "http://localhost:8000/v1/invoices/upload",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "v1",
+            "invoices",
+            "upload"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Upload & Extract Invoice",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "/Users/hayyan/code/ESG/ocr-invoice/sample-bills/COAL April bills.pdf"
+                },
+                {
+                  "key": "site_id",
+                  "value": "16",
+                  "type": "text",
+                  "description": "Optional: site ID"
+                },
+                {
+                  "key": "category_id",
+                  "value": "1",
+                  "type": "text",
+                  "description": "Optional: category ID"
+                },
+                {
+                  "key": "uploaded_by",
+                  "value": "11",
+                  "type": "text",
+                  "description": "Optional: user ID"
+                }
+              ]
+            },
+            "url": {
+              "raw": "http://localhost:8000/v1/invoices/upload",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "v1",
+                "invoices",
+                "upload"
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": null,
+          "header": [
+            {
+              "key": "date",
+              "value": "Mon, 16 Feb 2026 14:16:33 GMT"
+            },
+            {
+              "key": "server",
+              "value": "uvicorn"
+            },
+            {
+              "key": "content-length",
+              "value": "3101"
+            },
+            {
+              "key": "content-type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"filename\": \"COAL April bills.pdf\",\n    \"data\": [\n        {\n            \"invoice_number\": \"TMPL25-26/22\",\n            \"invoice_date\": \"2025-04-06\",\n            \"vendor_name\": \"TOSHNIWAL MINERALS PRIVATE LIMITED\",\n            \"vendor_address\": \"7-5-27/49D, Gaganpahad, Rajendranagar (M) RR.DI-TS Telangana - 501323, India\",\n            \"subtotal\": 229709,\n            \"total_amount\": 251518,\n            \"currency\": \"INR\",\n            \"tax_amount\": 21809.46,\n            \"line_items\": [\n                {\n                    \"description\": \"COAL\",\n                    \"quantity\": 25.81,\n                    \"unit\": \"MT\",\n                    \"unit_price\": 8900,\n                    \"amount\": 229709\n                }\n            ],\n            \"activity_description\": \"Coal\",\n            \"total_quantity\": 25.81,\n            \"unit_of_measurement\": \"MT\"\n        },\n        {\n            \"invoice_number\": \"SDE/2025-26/09\",\n            \"invoice_date\": \"2025-04-07\",\n            \"vendor_name\": \"Shree Dhanalaxmi Enterprises\",\n            \"vendor_address\": \"Plotno.27part, Survey No.110, Medchal Road, Dommarapochampally Village Quthbullapur Mandal, R.R Dist-500043\",\n            \"subtotal\": 314971,\n            \"total_amount\": 344875.56,\n            \"currency\": \"INR\",\n            \"tax_amount\": 29904.56,\n            \"line_items\": [\n                {\n                    \"description\": \"Steam Coal\",\n                    \"quantity\": 35.39,\n                    \"unit\": \"TN\",\n                    \"unit_price\": 8900,\n                    \"amount\": 314971\n                }\n            ],\n            \"activity_description\": \"Steam Coal\",\n            \"total_quantity\": 35.39,\n            \"unit_of_measurement\": \"TN\"\n        },\n        {\n            \"invoice_number\": \"SDE/2025-26/15\",\n            \"invoice_date\": \"2025-04-16\",\n            \"vendor_name\": \"Shree Dhanalaxmi Enterprises\",\n            \"vendor_address\": \"Plotno.27part, Survey No.110, Medchal Road, Dommarapochampally Village, Quthbullapur Mandal, R.R Dist-500043\",\n            \"subtotal\": 196690,\n            \"total_amount\": 215364.5,\n            \"currency\": \"INR\",\n            \"tax_amount\": 18674.5,\n            \"line_items\": [\n                {\n                    \"description\": \"Steam Coal\",\n                    \"quantity\": 22.1,\n                    \"unit\": \"TN\",\n                    \"unit_price\": 8900,\n                    \"amount\": 196690\n                }\n            ],\n            \"activity_description\": \"Steam Coal\",\n            \"total_quantity\": 22.1,\n            \"unit_of_measurement\": \"TN\"\n        }\n    ],\n    \"error\": null,\n    \"validations\": [\n        [\n            {\n                \"check\": \"subtotal_plus_tax_equals_total\",\n                \"ok\": false,\n                \"subtotal\": 229709,\n                \"tax\": 21809.46,\n                \"total\": 251518,\n                \"expected\": 251518.46,\n                \"delta\": 0.46\n            }\n        ],\n        [\n            {\n                \"check\": \"subtotal_plus_tax_equals_total\",\n                \"ok\": true,\n                \"subtotal\": 314971,\n                \"tax\": 29904.56,\n                \"total\": 344875.56,\n                \"expected\": 344875.56,\n                \"delta\": 0\n            }\n        ],\n        [\n            {\n                \"check\": \"subtotal_plus_tax_equals_total\",\n                \"ok\": true,\n                \"subtotal\": 196690,\n                \"tax\": 18674.5,\n                \"total\": 215364.5,\n                \"expected\": 215364.5,\n                \"delta\": 0\n            }\n        ]\n    ],\n    \"suggested_categories\": [\n        {\n            \"emission_category_name\": \"Coal\",\n            \"category_id\": 1,\n            \"category_name\": \"Stationary Combustion\",\n            \"scope\": \"Scope 1\",\n            \"denominator_unit\": \"tonne\",\n            \"confidence\": 100\n        },\n        {\n            \"emission_category_name\": \"Coal\",\n            \"category_id\": 1,\n            \"category_name\": \"Stationary Combustion\",\n            \"scope\": \"Scope 1\",\n            \"denominator_unit\": \"tonne\",\n            \"confidence\": 100\n        },\n        {\n            \"emission_category_name\": \"Coal\",\n            \"category_id\": 1,\n            \"category_name\": \"Stationary Combustion\",\n            \"scope\": \"Scope 1\",\n            \"denominator_unit\": \"tonne\",\n            \"confidence\": 100\n        }\n    ],\n    \"emission\": [\n        {\n            \"site_id\": 16,\n            \"category_id\": 1,\n            \"activity_data\": {\n                \"Activity Data\": \"25.81\",\n                \"emission_category\": \"Coal\"\n            },\n            \"activity_data_unit\": \"tonne\",\n            \"date_of_reporting\": \"2025-04-06\",\n            \"total_emission\": 0,\n            \"unit\": \"kg CO2e\"\n        },\n        {\n            \"site_id\": 16,\n            \"category_id\": 1,\n            \"activity_data\": {\n                \"Activity Data\": \"35.39\",\n                \"emission_category\": \"Coal\"\n            },\n            \"activity_data_unit\": \"tonne\",\n            \"date_of_reporting\": \"2025-04-07\",\n            \"total_emission\": 0,\n            \"unit\": \"kg CO2e\"\n        },\n        {\n            \"site_id\": 16,\n            \"category_id\": 1,\n            \"activity_data\": {\n                \"Activity Data\": \"22.1\",\n                \"emission_category\": \"Coal\"\n            },\n            \"activity_data_unit\": \"tonne\",\n            \"date_of_reporting\": \"2025-04-16\",\n            \"total_emission\": 0,\n            \"unit\": \"kg CO2e\"\n        }\n    ]\n}"
+        }
+      ]
+    },
+    {
+      "name": "List Invoices",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8000/v1/invoices",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "v1",
+            "invoices"
+          ],
+          "query": [
+            {
+              "key": "site_id",
+              "value": "",
+              "description": "Optional: filter by site",
+              "disabled": true
+            },
+            {
+              "key": "category_id",
+              "value": "",
+              "description": "Optional: filter by category",
+              "disabled": true
+            }
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "List Invoices",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8000/v1/invoices?user_id=11",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "v1",
+                "invoices"
+              ],
+              "query": [
+                {
+                  "key": "site_id",
+                  "value": "",
+                  "description": "Optional: filter by site",
+                  "disabled": true
+                },
+                {
+                  "key": "category_id",
+                  "value": "",
+                  "description": "Optional: filter by category",
+                  "disabled": true
+                },
+                {
+                  "key": "user_id",
+                  "value": "11"
+                }
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": null,
+          "header": [
+            {
+              "key": "date",
+              "value": "Mon, 16 Feb 2026 14:29:20 GMT"
+            },
+            {
+              "key": "server",
+              "value": "uvicorn"
+            },
+            {
+              "key": "content-length",
+              "value": "1942"
+            },
+            {
+              "key": "content-type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "[\n    {\n        \"invoice_id\": 1,\n        \"file_name\": \"COAL April bills.pdf\",\n        \"cloudinary_url\": \"https://res.cloudinary.com/djaq6lknc/image/upload/v1771251396/invoices/hud0nihfowwlgdl6rp4h.pdf\",\n        \"cloudinary_public_id\": \"invoices/hud0nihfowwlgdl6rp4h\",\n        \"file_type\": \"application/pdf\",\n        \"file_size\": 265759,\n        \"ocr_text\": [\n            {\n                \"currency\": \"INR\",\n                \"subtotal\": 229709,\n                \"line_items\": [\n                    {\n                        \"unit\": \"MT\",\n                        \"amount\": 229709,\n                        \"quantity\": 25.81,\n                        \"unit_price\": 8900,\n                        \"description\": \"COAL\"\n                    }\n                ],\n                \"tax_amount\": 21809.46,\n                \"vendor_name\": \"TOSHNIWAL MINERALS PRIVATE LIMITED\",\n                \"invoice_date\": \"2025-04-06\",\n                \"total_amount\": 251518,\n                \"invoice_number\": \"TMPL25-26/22\",\n                \"total_quantity\": 25.81,\n                \"vendor_address\": \"7-5-27/49D, Gaganpahad, Rajendranagar (M) RR.DI-TS Telangana - 501323, India\",\n                \"unit_of_measurement\": \"MT\",\n                \"activity_description\": \"Coal\"\n            },\n            {\n                \"currency\": \"INR\",\n                \"subtotal\": 314971,\n                \"line_items\": [\n                    {\n                        \"unit\": \"TN\",\n                        \"amount\": 314971,\n                        \"quantity\": 35.39,\n                        \"unit_price\": 8900,\n                        \"description\": \"Steam Coal\"\n                    }\n                ],\n                \"tax_amount\": 29904.56,\n                \"vendor_name\": \"Shree Dhanalaxmi Enterprises\",\n                \"invoice_date\": \"2025-04-07\",\n                \"total_amount\": 344875.56,\n                \"invoice_number\": \"SDE/2025-26/09\",\n                \"total_quantity\": 35.39,\n                \"vendor_address\": \"Plotno.27part, Survey No.110, Medchal Road, Dommarapochampally Village Quthbullapur Mandal, R.R Dist-500043\",\n                \"unit_of_measurement\": \"TN\",\n                \"activity_description\": \"Steam Coal\"\n            },\n            {\n                \"currency\": \"INR\",\n                \"subtotal\": 196690,\n                \"line_items\": [\n                    {\n                        \"unit\": \"TN\",\n                        \"amount\": 196690,\n                        \"quantity\": 22.1,\n                        \"unit_price\": 8900,\n                        \"description\": \"Steam Coal\"\n                    }\n                ],\n                \"tax_amount\": 18674.5,\n                \"vendor_name\": \"Shree Dhanalaxmi Enterprises\",\n                \"invoice_date\": \"2025-04-16\",\n                \"total_amount\": 215364.5,\n                \"invoice_number\": \"SDE/2025-26/15\",\n                \"total_quantity\": 22.1,\n                \"vendor_address\": \"Plotno.27part, Survey No.110, Medchal Road, Dommarapochampally Village, Quthbullapur Mandal, R.R Dist-500043\",\n                \"unit_of_measurement\": \"TN\",\n                \"activity_description\": \"Steam Coal\"\n            }\n        ],\n        \"uploaded_by\": 11,\n        \"site_id\": 16,\n        \"category_id\": 1,\n        \"emission_id\": null,\n        \"created_at\": \"2026-02-16T19:46:37.068993\",\n        \"updated_at\": \"2026-02-16T19:46:49.068018\"\n    }\n]"
+        }
+      ]
+    },
+    {
+      "name": "Get Invoice by ID",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8000/v1/invoices/1",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "v1",
+            "invoices",
+            "1"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Get Invoice by ID",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8000/v1/invoices/5",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "v1",
+                "invoices",
+                "5"
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": null,
+          "header": [
+            {
+              "key": "date",
+              "value": "Mon, 16 Feb 2026 15:07:56 GMT"
+            },
+            {
+              "key": "server",
+              "value": "uvicorn"
+            },
+            {
+              "key": "content-length",
+              "value": "434"
+            },
+            {
+              "key": "content-type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"invoice_id\": 5,\n    \"file_name\": \"COAL July bills.pdf\",\n    \"cloudinary_url\": \"https://res.cloudinary.com/djaq6lknc/image/upload/v1771254467/invoices/xibzzd7qlqeseuxpxyf9.pdf\",\n    \"cloudinary_public_id\": \"invoices/xibzzd7qlqeseuxpxyf9\",\n    \"file_type\": \"application/pdf\",\n    \"file_size\": 244818,\n    \"ocr_text\": null,\n    \"uploaded_by\": 11,\n    \"site_id\": 16,\n    \"category_id\": 1,\n    \"emission_id\": null,\n    \"created_at\": \"2026-02-16T20:37:47.897375\",\n    \"updated_at\": \"2026-02-16T20:37:47.897375\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Delete Invoice",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8000/v1/invoices/1",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "v1",
+            "invoices",
+            "1"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Delete Invoice",
+          "originalRequest": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8000/v1/invoices/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "v1",
+                "invoices",
+                "1"
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": null,
+          "header": [
+            {
+              "key": "date",
+              "value": "Mon, 16 Feb 2026 14:38:27 GMT"
+            },
+            {
+              "key": "server",
+              "value": "uvicorn"
+            },
+            {
+              "key": "content-length",
+              "value": "57"
+            },
+            {
+              "key": "content-type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"message\": \"Invoice deleted successfully\",\n    \"invoice_id\": 1\n}"
+        }
+      ]
+    },
+    {
+      "name": "Bulk Delete Invoices",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ids\": [1, 2, 3]\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8000/v1/invoices/bulk",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "v1",
+            "invoices",
+            "bulk"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Bulk Delete Invoices",
+          "originalRequest": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [ 4 ]\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/v1/invoices/bulk",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "v1",
+                "invoices",
+                "bulk"
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": null,
+          "header": [
+            {
+              "key": "date",
+              "value": "Mon, 16 Feb 2026 15:07:04 GMT"
+            },
+            {
+              "key": "server",
+              "value": "uvicorn"
+            },
+            {
+              "key": "content-length",
+              "value": "59"
+            },
+            {
+              "key": "content-type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"message\": \"Successfully deleted 1 invoice(s)\",\n    \"deleted\": 1\n}"
+        }
+      ]
+    },
+    {
+      "name": "[Legacy] Extract Invoice (No Storage)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "value": null
+            },
+            {
+              "key": "category",
+              "value": "general",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "http://localhost:8000/v1/extract",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "v1",
+            "extract"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
 }
