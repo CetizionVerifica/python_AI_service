@@ -1,0 +1,187 @@
+
+{
+	"info": {
+		"_postman_id": "ocr-invoice-collection",
+		"name": "OCR Invoice API",
+		"description": "Collection for OCR Invoice Extraction Service",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8000/health",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8000",
+					"path": ["health"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Upload & Extract Invoice",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "file",
+							"type": "file",
+							"src": []
+						},
+						{
+							"key": "category",
+							"value": "general",
+							"type": "text"
+						},
+						{
+							"key": "site_id",
+							"value": "",
+							"type": "text",
+							"description": "Optional: site ID"
+						},
+						{
+							"key": "category_id",
+							"value": "",
+							"type": "text",
+							"description": "Optional: category ID"
+						},
+						{
+							"key": "uploaded_by",
+							"value": "",
+							"type": "text",
+							"description": "Optional: user ID"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://localhost:8000/v1/invoices/upload",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8000",
+					"path": ["v1", "invoices", "upload"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "List Invoices",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8000/v1/invoices",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8000",
+					"path": ["v1", "invoices"],
+					"query": [
+						{
+							"key": "site_id",
+							"value": "",
+							"description": "Optional: filter by site",
+							"disabled": true
+						},
+						{
+							"key": "category_id",
+							"value": "",
+							"description": "Optional: filter by category",
+							"disabled": true
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get Invoice by ID",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8000/v1/invoices/1",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8000",
+					"path": ["v1", "invoices", "1"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Delete Invoice",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8000/v1/invoices/1",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8000",
+					"path": ["v1", "invoices", "1"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Bulk Delete Invoices",
+			"request": {
+				"method": "DELETE",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "[1, 2, 3]"
+				},
+				"url": {
+					"raw": "http://localhost:8000/v1/invoices/bulk",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8000",
+					"path": ["v1", "invoices", "bulk"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "[Legacy] Extract Invoice (No Storage)",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "file",
+							"type": "file",
+							"src": []
+						},
+						{
+							"key": "category",
+							"value": "general",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://localhost:8000/v1/extract",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8000",
+					"path": ["v1", "extract"]
+				}
+			},
+			"response": []
+		}
+	]
+}

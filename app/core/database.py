@@ -1,0 +1,156 @@
+
+import logging
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+def get_connection():
+    """Get a database connection to emissions_db."""
+    return psycopg2.connect(
+        host=settings.DB_HOST,
+        port=settings.DB_PORT,
+        user=settings.DB_USERNAME,
+        password=settings.DB_PASSWORD,
+        dbname=settings.DB_NAME,
+    )
+
+
+def insert_invoice(
+    file_name: str,
+    cloudinary_url: str,
+    cloudinary_public_id: str,
+    file_type: str,
+    file_size: int | None,
+    uploaded_by: int | None = None,
+    site_id: int | None = None,
+    category_id: int | None = None,
+) -> dict:
+    """Insert a new invoice record and return it."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO invoice (
+                    file_name, cloudinary_url, cloudinary_public_id,
+                    file_type, file_size, uploaded_by, site_id, category_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    file_name, cloudinary_url, cloudinary_public_id,
+                    file_type, file_size, uploaded_by, site_id, category_id,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row)
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB insert_invoice failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def update_invoice_ocr(invoice_id: int, ocr_text: dict) -> dict:
+    """Update the ocr_text field for an invoice."""
+    import json
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE invoice
+                SET ocr_text = %s, updated_at = NOW()
+                WHERE invoice_id = %s
+                RETURNING *
+                """,
+                (json.dumps(ocr_text), invoice_id),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB update_invoice_ocr failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def get_invoices(site_id: int | None = None, category_id: int | None = None, uploaded_by: int | None = None) -> list:
+    """Get all invoices with optional filters."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = "SELECT * FROM invoice WHERE 1=1"
+            params = []
+            if site_id:
+                query += " AND site_id = %s"
+                params.append(site_id)
+            if category_id:
+                query += " AND category_id = %s"
+                params.append(category_id)
+            if uploaded_by:
+                query += " AND uploaded_by = %s"
+                params.append(uploaded_by)
+            query += " ORDER BY created_at DESC"
+            cur.execute(query, params)
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_invoice_by_id(invoice_id: int) -> dict | None:
+    """Get a single invoice by ID."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM invoice WHERE invoice_id = %s", (invoice_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def delete_invoice(invoice_id: int) -> dict | None:
+    """Delete an invoice and return the deleted record (for Cloudinary cleanup)."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "DELETE FROM invoice WHERE invoice_id = %s RETURNING *",
+                (invoice_id,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB delete_invoice failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def bulk_delete_invoices(invoice_ids: list[int]) -> list[dict]:
+    """Bulk delete invoices and return deleted records."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "DELETE FROM invoice WHERE invoice_id = ANY(%s) RETURNING *",
+                (invoice_ids,),
+            )
+            rows = cur.fetchall()
+            conn.commit()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB bulk_delete_invoices failed: {e}")
+        raise
+    finally:
+        conn.close()
