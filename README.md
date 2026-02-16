@@ -1,34 +1,178 @@
-# ocr-invoice
+# OCR Invoice
 
-Minimal FastAPI service to extract fields from bills/invoices (PDF or images).
+FastAPI service that extracts structured data from bills/invoices (PDF or scanned images) using OCR + LLM, with emission-ready output for ESG reporting.
 
-## Run
+## Features
 
-- Install deps: `uv sync`
-- Start server: `uv run python main.py`
+- **OCR** — Extracts text from PDFs (native + scanned via Tesseract)
+- **LLM Extraction** — Sends OCR text to OpenRouter (Gemini) for structured data extraction
+- **Multi-Invoice** — Handles documents with multiple invoices/bills
+- **Emission Mapping** — Auto-maps extracted data to emission reporting format (`activity_data`, `date_of_reporting`, `activity_data_unit`)
+- **Category Matching** — Fuzzy matches activity descriptions to emission categories (Coal, Diesel, Electricity, R-22, etc.)
+- **Cloudinary + PostgreSQL** — Stores uploaded files and extraction results
+- **Validation** — Cross-checks extracted totals against line items
 
-Health: `GET /health`
-
-Extract: `POST /v1/extract` (multipart form-data)
-
-Example:
+## Setup
 
 ```bash
-curl -sS -X POST http://localhost:8000/v1/extract \
-  -F "file=@/path/to/invoice.pdf" \
-  -F "fields=invoice_number,invoice_date,vendor_name,subtotal,tax,total,currency" | jq
+# Install dependencies
+uv sync
+
+# Copy and configure environment variables
+cp .env.example .env
+
+# Start server
+uv run python main.py
 ```
 
-## LLM config
+Server runs on `http://localhost:8000` by default.
 
-Set:
-- `LLM_API_KEY` (or `OPENAI_API_KEY`)
-- `LLM_MODEL` (default: `gpt-4o-mini`)
-- `LLM_BASE_URL` (default: `https://api.openai.com/v1`)
+## Environment Variables
 
-Optional:
-- `MAX_PAGES` (default: 3)
-- `MAX_FILE_MB` (default: 20)
-- `MIN_PDF_TEXT_CHARS` (default: 200)
-- `MAX_CONCURRENT_REQUESTS` (default: 4)
-- `MAX_CONCURRENT_LLM` (default: 2)
+| Variable | Description |
+|---|---|
+| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | PostgreSQL connection |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Cloudinary file storage |
+| `OPENROUTER_API_KEY` | OpenRouter API key for LLM |
+| `OPENROUTER_MODEL` | LLM model (default: `google/gemini-3-flash-preview`) |
+
+## API Endpoints
+
+### Health Check
+
+```
+GET /health
+```
+
+### Extract Only (no storage)
+
+```
+POST /v1/extract
+```
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `file` | File | ✅ | PDF or image file |
+
+### Upload + Extract (full flow)
+
+Uploads to Cloudinary, stores in DB, runs OCR → LLM → Validate → Emission Mapping.
+
+```
+POST /v1/invoices/upload
+```
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `file` | File | ✅ | PDF or image file |
+| `site_id` | int | No | Site ID for emission mapping |
+| `category_id` | int | No | Emission category ID |
+| `uploaded_by` | int | No | User ID |
+
+### List Invoices
+
+```
+GET /v1/invoices?user_id=11&site_id=16
+```
+
+| Query Param | Type | Description |
+|---|---|---|
+| `user_id` | int | Filter by uploader |
+| `site_id` | int | Filter by site |
+| `category_id` | int | Filter by category |
+
+### Get Invoice
+
+```
+GET /v1/invoices/{invoice_id}
+```
+
+### Delete Invoice
+
+```
+DELETE /v1/invoices/{invoice_id}
+```
+
+### Bulk Delete Invoices
+
+```
+DELETE /v1/invoices/bulk
+```
+
+```json
+{ "ids": [1, 2, 3] }
+```
+
+## Response Structure
+
+```json
+{
+  "filename": "DIESEL bills.pdf",
+  "data": [
+    {
+      "invoice_number": "INV-001",
+      "invoice_date": "2025-03-18",
+      "vendor_name": "ABC Fuels",
+      "total_amount": 120000.0,
+      "activity_description": "Diesel",
+      "total_quantity": 1600.0,
+      "unit_of_measurement": "litre",
+      "line_items": [...]
+    }
+  ],
+  "emission": [
+    {
+      "site_id": 16,
+      "category_id": 1,
+      "activity_data": {
+        "Activity Data": "1600.0",
+        "emission_category": "Diesel"
+      },
+      "activity_data_unit": "litre",
+      "date_of_reporting": "2025-03-18",
+      "total_emission": 0.0,
+      "unit": "kg CO2e"
+    }
+  ],
+  "suggested_categories": [...],
+  "validations": [...]
+}
+```
+
+## Project Structure
+
+```
+├── app/
+│   ├── api/
+│   │   └── invoices.py        # API endpoints
+│   ├── core/
+│   │   ├── config.py          # Settings (env vars)
+│   │   ├── database.py        # PostgreSQL operations
+│   │   └── cloudinary_service.py
+│   ├── schemas/
+│   │   └── invoice.py         # Pydantic models
+│   └── services/
+│       ├── ocr.py             # PDF text extraction + Tesseract OCR
+│       ├── llm.py             # OpenRouter LLM client
+│       ├── pipeline.py        # Orchestrates OCR → LLM → Validate
+│       ├── validators.py      # Total/line-item cross-checks
+│       ├── fallback.py        # Regex fallback if LLM fails
+│       ├── category_matcher.py # Fuzzy emission category matching
+│       └── storage.py         # Temp file management
+├── scripts/
+│   ├── test_all_json.py       # Test all sample bills → JSON
+│   └── test_emission.py       # Test emission mapping
+├── sample-bills/              # Sample PDFs for testing
+├── main.py                    # Entry point
+└── pyproject.toml
+```
+
+## Testing
+
+```bash
+# Test all sample bills and save results as JSON
+uv run python scripts/test_all_json.py
+
+# Test emission mapping with a specific bill
+uv run python scripts/test_emission.py
+```
