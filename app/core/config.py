@@ -33,13 +33,13 @@ class Settings(BaseSettings):
 
     # App Settings
     MAX_FILE_MB: int = 20
-    MAX_PAGES: int = 10
+    MAX_PAGES: int = 12
     MIN_PDF_TEXT_CHARS: int = 200
     PDF_RENDER_SCALE: float = 2.0
     LLM_TIMEOUT_S: float = 90.0
     MAX_RETRIES: int = 2
-    MAX_CONCURRENT_REQUESTS: int = 4
-    MAX_CONCURRENT_LLM: int = 2
+    MAX_CONCURRENT_REQUESTS: int = 5
+    MAX_CONCURRENT_LLM: int = 3
 
 settings = Settings()
 
