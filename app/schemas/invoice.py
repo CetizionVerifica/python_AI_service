@@ -59,6 +59,7 @@ class EmissionReady(BaseModel):
     date_of_reporting: Optional[str] = None
     total_emission: float = 0.0
     unit: str = "kg CO2e"
+    vendor_name: Optional[str] = None
 
 
 class ExtractionResponse(BaseModel):

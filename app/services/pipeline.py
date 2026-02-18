@@ -3,7 +3,7 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from app.services import ocr, llm, storage, validators, fallback, category_matcher
+from app.services import ocr, llm, validators, fallback, category_matcher
 from app.services.category_matcher import fetch_emission_categories_by_site_and_category
 from app.schemas.invoice import ExtractionResponse, CategorySuggestion, EmissionReady
 
@@ -181,7 +181,8 @@ async def process_document(
                 activity_data_unit=inv.unit_of_measurement if inv else None,
                 date_of_reporting=inv.invoice_date if inv else None,
                 total_emission=0.0,
-                unit="kg CO2e"
+                unit="kg CO2e",
+                vendor_name=inv.vendor_name if inv else None,
             ))
 
         return ExtractionResponse(
@@ -194,5 +195,4 @@ async def process_document(
         )
 
     finally:
-        storage.cleanup(file_path)
         logger.info(f"Pipeline finished for {filename}.")
