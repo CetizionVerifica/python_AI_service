@@ -1,4 +1,5 @@
 
+import asyncio
 import logging
 from typing import Optional, List
 import httpx
@@ -27,48 +28,31 @@ async def upload_and_extract_invoice(
 ):
     """
     Upload an Invoice (PDF/Image), store in Cloudinary + DB, and extract structured data.
+    Cloudinary upload and the OCR/LLM pipeline run concurrently to minimise latency.
     """
     filename = file.filename or "unknown"
     logger.info(f"Received upload request for file: {filename}")
+    file_path = None
 
-    # 1. Save upload to temp
     try:
-        file_path = await storage.save_upload(file)
-    except Exception as e:
-        logger.error(f"Failed to save uploaded file {filename}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+        # 1. Save upload to temp
+        try:
+            file_path = await storage.save_upload(file)
+        except Exception as e:
+            logger.error(f"Failed to save uploaded file {filename}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
-    # 2. Upload to Cloudinary
-    try:
-        cloud_result = cloudinary_service.upload_file(file_path, folder="invoices")
-    except Exception as e:
-        storage.cleanup(file_path)
-        logger.error(f"Cloudinary upload failed for {filename}: {e}")
-        raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
-
-    # 3. Insert into invoice table
-    try:
-        invoice_row = database.insert_invoice(
-            file_name=filename,
-            cloudinary_url=cloud_result["secure_url"],
-            cloudinary_public_id=cloud_result["public_id"],
-            file_type=file.content_type or "application/octet-stream",
-            file_size=cloud_result.get("bytes"),
-            uploaded_by=uploaded_by,
-            site_id=site_id,
-            category_id=category_id,
-        )
-        invoice_id = invoice_row["invoice_id"]
-        logger.info(f"Invoice record created with ID: {invoice_id}")
-    except Exception as e:
-        storage.cleanup(file_path)
-        logger.error(f"DB insert failed for {filename}: {e}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
-    # 4. Process document (OCR -> LLM -> Validate)
-    try:
+        # 2. Run Cloudinary upload and OCR pipeline concurrently.
+        #    cloudinary_service.upload_file is synchronous, so wrap it in an executor
+        #    so it doesn't block the event loop and can truly overlap with the pipeline.
         available_units = [u.strip() for u in unit_names.split(",")] if unit_names else None
-        result = await pipeline.process_document(
+        loop = asyncio.get_event_loop()
+
+        cloud_task = loop.run_in_executor(
+            None,
+            lambda: cloudinary_service.upload_file(file_path, folder="invoices"),
+        )
+        pipeline_task = pipeline.process_document(
             file_path,
             filename,
             site_id=site_id,
@@ -76,17 +60,46 @@ async def upload_and_extract_invoice(
             available_units=available_units,
         )
 
-        # 5. Store OCR result in DB
+        raw = await asyncio.gather(cloud_task, pipeline_task, return_exceptions=True)
+        cloud_result, result = raw[0], raw[1]
+
+        if isinstance(cloud_result, Exception):
+            logger.error(f"Cloudinary upload failed for {filename}: {cloud_result}")
+            raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {cloud_result}")
+        if isinstance(result, Exception):
+            logger.error(f"Processing failed for {filename}: {result}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(result))
+
+        # 3. Insert into invoice table (both results available now)
+        try:
+            invoice_row = database.insert_invoice(
+                file_name=filename,
+                cloudinary_url=cloud_result["secure_url"],
+                cloudinary_public_id=cloud_result["public_id"],
+                file_type=file.content_type or "application/octet-stream",
+                file_size=cloud_result.get("bytes"),
+                uploaded_by=uploaded_by,
+                site_id=site_id,
+                category_id=category_id,
+            )
+            invoice_id = invoice_row["invoice_id"]
+            logger.info(f"Invoice record created with ID: {invoice_id}")
+        except Exception as e:
+            logger.error(f"DB insert failed for {filename}: {e}")
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+        # 4. Store OCR result in DB
         if result.data:
             database.update_invoice_ocr(invoice_id, [inv.model_dump() for inv in result.data])
 
         result.cloudinary_url = cloud_result["secure_url"]
         result.invoice_id = invoice_id
         return result
-    except Exception as e:
-        logger.error(f"Processing failed for {filename}: {e}", exc_info=True)
-        storage.cleanup(file_path)
-        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        # Always clean up the temp file — must happen after both concurrent tasks finish
+        if file_path:
+            storage.cleanup(file_path)
 
 
 @router.get("/invoices")
@@ -238,5 +251,6 @@ async def extract_invoice(
         return result
     except Exception as e:
         logger.error(f"Processing failed for {filename}: {e}", exc_info=True)
-        storage.cleanup(file_path)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        storage.cleanup(file_path)
