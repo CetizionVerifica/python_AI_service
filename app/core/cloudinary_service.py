@@ -24,7 +24,8 @@ def upload_file(file_path: Path, folder: str = "invoices") -> dict:
         result = cloudinary.uploader.upload(
             str(file_path),
             folder=folder,
-            resource_type="auto",
+            resource_type="raw",
+            type="upload",
         )
         logger.info(f"Uploaded to Cloudinary: {result.get('public_id')}")
         return {

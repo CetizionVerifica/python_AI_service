@@ -65,7 +65,44 @@ def _parse_json_object(text: str) -> dict | list:
         raise LLMError("LLM returned invalid JSON.")
 
 
-EXTRACTION_PROMPT = """You are an expert data extraction assistant.
+def build_extraction_prompt(
+    known_categories: list[str] | None = None,
+    available_units: list[str] | None = None,
+) -> str:
+    """
+    Builds the extraction system prompt.
+    When known_categories is provided, the LLM is instructed to identify which
+    emission category name from that list best fits each invoice.
+    When available_units is provided, the LLM maps the raw document unit to the
+    closest configured unit name for accurate downstream calculation.
+    """
+    emission_category_rule = (
+        "- For `emission_category`: return null — it will be determined automatically."
+        if not known_categories
+        else (
+            "- For `emission_category`: scan the document for text that matches or closely "
+            "describes one of the valid emission category names listed below. "
+            "Return the EXACT name from the list that best fits this invoice. "
+            "If nothing matches, return null.\n"
+            "  Valid emission categories:\n"
+            + "\n".join(f"    - {c}" for c in known_categories)
+        )
+    )
+
+    unit_rule = (
+        "- For `unit_of_measurement`: extract the physical unit EXACTLY as it appears in the document (e.g., \"litre\", \"kg\", \"kWh\", \"m³\", \"gallon\", \"tonne\"). NOT currency."
+        if not available_units
+        else (
+            "- For `unit_of_measurement`: identify the physical quantity unit in the document, "
+            "then return the EXACT name from the configured units list below that best matches it. "
+            "For example if the document says \"kgs\" and the list contains \"kg\", return \"kg\". "
+            "Only use the raw document value if nothing in the list matches. NOT currency.\n"
+            "  Configured activity units:\n"
+            + "\n".join(f"    - {u}" for u in available_units)
+        )
+    )
+
+    return f"""You are an expert data extraction assistant.
 Your task is to extract structured invoice data from the provided text.
 The document may contain ONE or MULTIPLE invoices/bills. Extract each one separately.
 
@@ -75,11 +112,12 @@ Rules:
 - Format dates as YYYY-MM-DD.
 - For `activity_description`: identify what resource/commodity was consumed (e.g., "Diesel", "Electricity", "LPG", "Coal", "R-22", "Water", "Waste").
 - For `total_quantity`: extract the total physical quantity consumed (not monetary). Sum line item quantities if needed.
-- For `unit_of_measurement`: extract the physical unit (e.g., "litre", "kg", "kWh", "m³", "gallon", "tonne"). NOT currency.
+{unit_rule}
+{emission_category_rule}
 
 Return a JSON object with key "invoices" containing an array. Each element is one invoice:
-{"invoices": [
-    {
+{{"invoices": [
+    {{
         "invoice_number": "string or null",
         "invoice_date": "YYYY-MM-DD or null",
         "vendor_name": "string or null",
@@ -87,21 +125,22 @@ Return a JSON object with key "invoices" containing an array. Each element is on
         "subtotal": "float or null",
         "tax_amount": "float or null",
         "total_amount": "float or null",
-        "currency": "INR",
+        "currency": "string",
         "activity_description": "string or null",
         "total_quantity": "float or null",
         "unit_of_measurement": "string or null",
+        "emission_category": "string or null",
         "line_items": [
-            {
+            {{
                 "description": "string",
                 "quantity": "float",
                 "unit": "string or null",
                 "unit_price": "float",
                 "amount": "float"
-            }
+            }}
         ]
-    }
-]}
+    }}
+]}}
 
 If there is only one invoice, still return it inside the array."""
 
@@ -121,7 +160,7 @@ def _call_openrouter(messages: list[dict]) -> str:
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=4096,
+            max_tokens=13333,
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -129,13 +168,36 @@ def _call_openrouter(messages: list[dict]) -> str:
         raise e
 
 
-def extract_structured_data(ocr_text: str) -> list[InvoiceData]:
+def extract_structured_data(
+    ocr_text: str,
+    known_categories: list[str] | None = None,
+    available_units: list[str] | None = None,
+) -> list[InvoiceData]:
     """
     Sends the OCR text to OpenRouter to extract structured Invoice Data.
     Returns a list of invoices (1 or more per document).
+
+    known_categories: optional list of emission_category_name values scoped to
+    the upload's site+category combination. When supplied, the LLM is guided to
+    identify which category best fits the invoice content.
+
+    available_units: optional list of configured activity unit names (e.g. "kg",
+    "litres"). When supplied, the LLM maps the raw document unit to the closest
+    match so the extracted value aligns with the configured units for calculation.
     """
+    prompt = build_extraction_prompt(known_categories, available_units)
+    if known_categories:
+        logger.info(
+            f"LLM prompt includes {len(known_categories)} known emission categories: "
+            f"{known_categories}"
+        )
+    if available_units:
+        logger.info(
+            f"LLM prompt includes {len(available_units)} configured activity units: {available_units}"
+        )
+
     messages = [
-        {"role": "system", "content": EXTRACTION_PROMPT},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": f"DOCUMENT TEXT:\n{ocr_text}"},
     ]
 

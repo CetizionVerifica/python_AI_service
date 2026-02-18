@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # App Settings
     MAX_FILE_MB: int = 20
-    MAX_PAGES: int = 3
+    MAX_PAGES: int = 10
     MIN_PDF_TEXT_CHARS: int = 200
     PDF_RENDER_SCALE: float = 2.0
     LLM_TIMEOUT_S: float = 90.0

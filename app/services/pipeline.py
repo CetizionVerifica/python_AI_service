@@ -4,6 +4,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from app.services import ocr, llm, storage, validators, fallback, category_matcher
+from app.services.category_matcher import fetch_emission_categories_by_site_and_category
 from app.schemas.invoice import ExtractionResponse, CategorySuggestion, EmissionReady
 
 logger = logging.getLogger(__name__)
@@ -12,17 +13,20 @@ logger = logging.getLogger(__name__)
 executor = ThreadPoolExecutor(max_workers=4)
 
 async def process_document(
-    file_path: Path, 
-    filename: str, 
+    file_path: Path,
+    filename: str,
     site_id: int | None = None,
-    category_id: int | None = None
+    category_id: int | None = None,
+    available_units: list[str] | None = None,
 ) -> ExtractionResponse:
     """
     Orchestrates the extraction pipeline:
-    1. OCR → 2. LLM → 3. Validate each → 4. Fuzzy match each → 5. Cleanup
+    1. Fetch scoped emission categories (if site+category provided)
+    2. OCR → 3. LLM (with known categories injected) → 4. Validate each
+    5. Fuzzy match each (scoped) → 6. Build emission-ready payload → 7. Cleanup
     """
     logger.info(f"Starting pipeline for document: {filename}")
-    
+
     extracted_text = ""
     invoices = []
     all_validations = []
@@ -30,24 +34,57 @@ async def process_document(
     all_emission_ready = []
     error_message = None
 
+    # 1. Fetch scoped emission categories when site+category context is available.
+    #    These are the same names the Node.js API returns for this combination,
+    #    so the LLM and fuzzy-matcher both work from the same constrained list.
+    known_category_names: list[str] = []
+    known_units: list[str] = []
+    if site_id is not None and category_id is not None:
+        try:
+            loop = asyncio.get_event_loop()
+            scoped_categories = await loop.run_in_executor(
+                executor,
+                fetch_emission_categories_by_site_and_category,
+                site_id,
+                category_id,
+            )
+            known_category_names = [c["emission_category_name"] for c in scoped_categories]
+            known_units = list({
+                c["denominator_unit"] for c in scoped_categories if c["denominator_unit"]
+            })
+            logger.info(
+                f"Fetched {len(known_category_names)} scoped emission categories for "
+                f"site_id={site_id}, category_id={category_id}: {known_category_names}"
+            )
+            logger.info(f"Known units for LLM prompt: {known_units}")
+        except Exception as e:
+            logger.warning(f"Could not fetch scoped emission categories: {e}. Proceeding without.")
+
     try:
-        # 1. OCR (Run in threadpool to define non-blocking behavior)
+        # 2. OCR (Run in threadpool to define non-blocking behavior)
         loop = asyncio.get_event_loop()
         extracted_text = await loop.run_in_executor(executor, ocr.extract_text, file_path)
         logger.debug(f"OCR completed for {filename}. Text length: {len(extracted_text)}")
-        
-        # 2. LLM Extraction
+
+        # 3. LLM Extraction — inject known category names and units so the LLM
+        #    maps both emission_category and unit_of_measurement to the configured values.
         try:
-            invoices = await loop.run_in_executor(executor, llm.extract_structured_data, extracted_text)
+            invoices = await loop.run_in_executor(
+                executor,
+                llm.extract_structured_data,
+                extracted_text,
+                known_category_names or None,
+                available_units,
+            )
             logger.info(f"LLM extracted {len(invoices)} invoice(s) from {filename}.")
 
-            # 3. Validate each invoice
+            # 4. Validate each invoice
             for inv in invoices:
                 all_validations.append(validators.validate_totals(inv))
 
         except Exception as e:
             logger.error(f"LLM Extraction failed for {filename}: {e}")
-            
+
             error_str = str(e)
             if "API key not valid" in error_str or "API_KEY_INVALID" in error_str:
                 error_message = "LLM Service Unavailable: Invalid API Key. Using Regex Fallback."
@@ -59,11 +96,17 @@ async def process_document(
             invoices = [fallback_data]
             all_validations = [[]]
 
-        # 4. Fuzzy match each invoice + build emission-ready payload
-        for inv in invoices:
+        # 5. Fuzzy match each invoice + build emission-ready payload
+        for i, inv in enumerate(invoices):
             suggestion = None
             if inv and inv.activity_description:
-                match = category_matcher.match_category(inv.activity_description)
+                # Pass site+category context so matching is scoped to the same
+                # emission factors the Node.js API uses for this combination.
+                match = category_matcher.match_category(
+                    inv.activity_description,
+                    site_id=site_id,
+                    category_id=category_id,
+                )
                 if match:
                     suggestion = CategorySuggestion(
                         emission_category_name=match.emission_category_name,
@@ -74,20 +117,68 @@ async def process_document(
                         confidence=match.confidence,
                     )
 
+            # Check that the matched category has a denominator_unit defined
+            if suggestion and not suggestion.denominator_unit:
+                unit_warning = {
+                    "check": "activity_unit_defined",
+                    "ok": False,
+                    "message": (
+                        f"No activity unit defined for emission category "
+                        f"'{suggestion.emission_category_name}'"
+                        + (f" (site_id={site_id}, category_id={category_id})" if site_id and category_id else "")
+                        + ". Please configure denominator_unit in emission_factors."
+                    ),
+                    "emission_category": suggestion.emission_category_name,
+                }
+                if i < len(all_validations):
+                    all_validations[i].append(unit_warning)
+                else:
+                    all_validations.append([unit_warning])
+                logger.warning(unit_warning["message"])
+            elif not suggestion and inv and inv.activity_description:
+                no_match_warning = {
+                    "check": "activity_unit_defined",
+                    "ok": False,
+                    "message": (
+                        f"Could not match activity '{inv.activity_description}' to any emission category"
+                        + (f" for site_id={site_id}, category_id={category_id}" if site_id and category_id else "")
+                        + ". Activity unit unknown."
+                    ),
+                    "emission_category": None,
+                }
+                if i < len(all_validations):
+                    all_validations[i].append(no_match_warning)
+                else:
+                    all_validations.append([no_match_warning])
+                logger.warning(no_match_warning["message"])
+
             all_suggestions.append(suggestion)
+
+            # Determine the best emission_category_name for this invoice.
+            # Priority order:
+            #   1. LLM-identified value (extracted directly from the invoice text,
+            #      constrained to the known list when available)
+            #   2. Fuzzy-matcher suggestion (activity_description → DB match)
+            #   3. Raw activity_description as last resort
+            llm_category = inv.emission_category if inv else None
+            final_emission_category = (
+                llm_category
+                or (suggestion.emission_category_name if suggestion else None)
+                or (inv.activity_description if inv else "")
+            )
 
             # Build emission-ready payload (aligned with Node.js POST /emissions)
             # Use request category_id if provided, else suggestion
             final_category_id = category_id if category_id is not None else (suggestion.category_id if suggestion else None)
-            
+
             all_emission_ready.append(EmissionReady(
                 site_id=site_id,
                 category_id=final_category_id,
                 activity_data={
                     "Activity Data": str(inv.total_quantity) if inv and inv.total_quantity is not None else "",
-                    "emission_category": suggestion.emission_category_name if suggestion else (inv.activity_description if inv else ""),
+                    "emission_category": final_emission_category,
                 },
-                activity_data_unit=suggestion.denominator_unit if suggestion else (inv.unit_of_measurement if inv else None),
+                activity_data_unit=inv.unit_of_measurement if inv else None,
                 date_of_reporting=inv.invoice_date if inv else None,
                 total_emission=0.0,
                 unit="kg CO2e"

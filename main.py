@@ -4,11 +4,15 @@ from __future__ import annotations
 
 def main():
     import os
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
 
     import uvicorn
 
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("PORT", "8080"))
     reload = os.getenv("RELOAD", "0") == "1"
 
     uvicorn.run("app.main:app", host=host, port=port, reload=reload)

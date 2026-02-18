@@ -35,6 +35,10 @@ class InvoiceData(BaseModel):
         None,
         description="Physical unit of measurement (e.g., litre, kg, kWh, m³, gallon, tonne)"
     )
+    emission_category: Optional[str] = Field(
+        None,
+        description="Matched emission category name from the known list provided in context"
+    )
 
 
 class CategorySuggestion(BaseModel):
@@ -64,3 +68,5 @@ class ExtractionResponse(BaseModel):
     validations: List[List[dict]] = []
     suggested_categories: List[Optional[CategorySuggestion]] = []
     emission: List[EmissionReady] = []
+    cloudinary_url: Optional[str] = None
+    invoice_id: Optional[int] = None

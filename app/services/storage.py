@@ -3,6 +3,7 @@ import shutil
 import uuid
 import os
 import logging
+import httpx
 from pathlib import Path
 from fastapi import UploadFile
 from app.core.config import settings
@@ -27,6 +28,27 @@ async def save_upload(file: UploadFile) -> Path:
         file.file.close()
 
     return file_path
+
+
+async def download_from_url(url: str, original_filename: str) -> Path:
+    """
+    Downloads a remote file (e.g. a Cloudinary URL) to the temp directory.
+    Returns the local Path so it can be passed to the OCR pipeline.
+    """
+    file_id = str(uuid.uuid4())
+    extension = os.path.splitext(original_filename)[1] if original_filename else ".pdf"
+    file_path = Path(settings.TEMP_DIR) / f"{file_id}{extension}"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+
+    with open(file_path, "wb") as f:
+        f.write(response.content)
+
+    logger.debug(f"Downloaded {url} → {file_path}")
+    return file_path
+
 
 def cleanup(file_path: Path):
     """
