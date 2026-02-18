@@ -29,6 +29,15 @@ app.include_router(categories_router, prefix="/v1")
 def health_check():
     return {"status": "ok"}
 
+@app.get("/")
+def read_root():
+    return {
+        "project": "OCR Invoice Extraction API",
+        "version": "0.1.0",
+        "description": "Extract structured data from Invoices and Bills using Hybrid PDF/OCR + OpenRouter LLM.",
+        "documentation": "/docs"
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
