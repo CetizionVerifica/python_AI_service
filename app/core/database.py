@@ -154,3 +154,64 @@ def bulk_delete_invoices(invoice_ids: list[int]) -> list[dict]:
         raise
     finally:
         conn.close()
+
+
+def fetch_column_config(site_id: int, category_id: int) -> dict | None:
+    """
+    Fetch column_config with associated column details for a site+category.
+    Returns the config with columns, dropdown options, dependencies, and
+    emission_category_mapping — or None if no config exists.
+    """
+    import json as _json
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # 1. Fetch the column_config row
+            cur.execute(
+                """
+                SELECT pk_id, config_name, column_options, column_dependencies,
+                       dependent_options, emission_category_mapping
+                FROM column_config
+                WHERE site_id = %s AND category_id = %s
+                LIMIT 1
+                """,
+                (site_id, category_id),
+            )
+            config_row = cur.fetchone()
+            if not config_row:
+                return None
+
+            config = dict(config_row)
+            config_id = config["pk_id"]
+
+            # Parse JSONB fields that may come back as strings
+            for field in ("column_options", "column_dependencies", "dependent_options", "emission_category_mapping"):
+                val = config.get(field)
+                if isinstance(val, str):
+                    try:
+                        config[field] = _json.loads(val)
+                    except _json.JSONDecodeError:
+                        config[field] = {}
+                elif val is None:
+                    config[field] = {}
+
+            # 2. Fetch associated columns via the join table
+            cur.execute(
+                """
+                SELECT ce.pk_id, ce.column_name, ce.column_type
+                FROM column_config_columns ccc
+                JOIN column_entity ce ON ce.pk_id = ccc.column_id
+                WHERE ccc.column_config_id = %s
+                ORDER BY ce.pk_id
+                """,
+                (config_id,),
+            )
+            columns = [dict(row) for row in cur.fetchall()]
+            config["columns"] = columns
+
+            return config
+    except Exception as e:
+        logger.warning(f"fetch_column_config failed for site={site_id}, category={category_id}: {e}")
+        return None
+    finally:
+        conn.close()

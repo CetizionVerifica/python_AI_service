@@ -29,6 +29,10 @@ class ActivityEntry(BaseModel):
         None,
         description="Matched emission category name from the known list provided in context"
     )
+    column_values: Optional[dict[str, str]] = Field(
+        None,
+        description="Extracted dropdown field values keyed by column name (e.g., {'Waste Type': 'Process Organic Waste', 'Disposal Method': 'Incineration'})"
+    )
 
 
 class InvoiceData(BaseModel):
