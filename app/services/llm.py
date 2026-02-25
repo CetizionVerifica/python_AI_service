@@ -65,6 +65,26 @@ def _parse_json_object(text: str) -> dict | list:
         raise LLMError("LLM returned invalid JSON.")
 
 
+_ACTIVITY_FIELDS = ("activity_description", "total_quantity", "unit_of_measurement", "emission_category")
+
+
+def _normalize_invoice_activities(inv_dict: dict) -> dict:
+    """
+    Ensure the activities array exists. If the LLM returns old-format flat
+    activity fields instead, migrate them into a single-element activities list.
+    """
+    if "activities" not in inv_dict or not inv_dict["activities"]:
+        activity = {}
+        for field in _ACTIVITY_FIELDS:
+            if field in inv_dict and inv_dict[field] is not None:
+                activity[field] = inv_dict[field]
+        inv_dict["activities"] = [activity] if activity else []
+    # Remove flat fields so they don't conflict with computed_field on InvoiceData
+    for field in _ACTIVITY_FIELDS:
+        inv_dict.pop(field, None)
+    return inv_dict
+
+
 def build_extraction_prompt(
     known_categories: list[str] | None = None,
     available_units: list[str] | None = None,
@@ -110,8 +130,17 @@ Rules:
 - Do not guess. If a field is not found, return null.
 - Extract `subtotal`, `tax_amount`, and `total_amount` carefully.
 - Format dates as YYYY-MM-DD.
-- For `activity_description`: identify what resource/commodity was consumed (e.g., "Diesel", "Electricity", "LPG", "Coal", "R-22", "Water", "Waste").
-- For `total_quantity`: extract the total physical quantity consumed (not monetary). Sum line item quantities if needed.
+- For `activities`: identify ALL distinct purchased items or resources in each invoice.
+  Each line item that has its own quantity and unit should be a separate activity entry.
+  Include consumables (fuel, gas, chemicals), equipment (cylinders, containers), materials,
+  and any other billable item with a measurable quantity — exclude only pure service charges
+  like shipping, carriage, or taxes that have no physical unit.
+  For example, if an invoice lists "Refrigerant Gas HFC-32 10 KG", "R-410a Gas 45 KG",
+  and "Empty Cylinders 1 No", return three activity entries.
+  If only one item was purchased, still return it inside the activities array.
+  If no activity can be identified, return an empty activities array.
+- For each activity's `activity_description`: identify what was purchased (e.g., "Diesel", "Electricity", "LPG", "Coal", "R-22", "Water", "Waste", "Empty Cylinders", "R-410a Gas").
+- For each activity's `total_quantity`: extract the total physical quantity (not monetary). Sum line item quantities if needed.
 {unit_rule}
 {emission_category_rule}
 
@@ -126,10 +155,14 @@ Return a JSON object with key "invoices" containing an array. Each element is on
         "tax_amount": "float or null",
         "total_amount": "float or null",
         "currency": "string",
-        "activity_description": "string or null",
-        "total_quantity": "float or null",
-        "unit_of_measurement": "string or null",
-        "emission_category": "string or null",
+        "activities": [
+            {{
+                "activity_description": "string or null",
+                "total_quantity": "float or null",
+                "unit_of_measurement": "string or null",
+                "emission_category": "string or null"
+            }}
+        ],
         "line_items": [
             {{
                 "description": "string",
@@ -142,7 +175,8 @@ Return a JSON object with key "invoices" containing an array. Each element is on
     }}
 ]}}
 
-If there is only one invoice, still return it inside the array."""
+If there is only one invoice, still return it inside the array.
+If there is only one activity per invoice, still return it inside the activities array."""
 
 
 @retry(
@@ -219,8 +253,8 @@ def extract_structured_data(
         if not invoices_raw:
             raise LLMError("LLM returned no invoices.")
 
-        # Validate each with Pydantic
-        return [InvoiceData(**inv) for inv in invoices_raw]
+        # Normalize activities and validate each with Pydantic
+        return [InvoiceData(**_normalize_invoice_activities(inv)) for inv in invoices_raw]
 
     except (LLMError, ValueError, ValidationError) as e:
         logger.error(f"Extraction Error: {e}")

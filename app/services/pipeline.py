@@ -96,94 +96,104 @@ async def process_document(
             invoices = [fallback_data]
             all_validations = [[]]
 
-        # 5. Fuzzy match each invoice + build emission-ready payload
-        for i, inv in enumerate(invoices):
-            suggestion = None
-            if inv and inv.activity_description:
-                # Pass site+category context so matching is scoped to the same
-                # emission factors the Node.js API uses for this combination.
-                match = category_matcher.match_category(
-                    inv.activity_description,
+        # 5. Fuzzy match each activity + build emission-ready payload
+        for inv_idx, inv in enumerate(invoices):
+            if not inv or not inv.activities:
+                # Invoice with no activities — still add a placeholder emission
+                all_suggestions.append(None)
+                all_emission_ready.append(EmissionReady(
+                    invoice_index=inv_idx,
+                    activity_index=0,
                     site_id=site_id,
                     category_id=category_id,
-                )
-                if match:
-                    suggestion = CategorySuggestion(
-                        emission_category_name=match.emission_category_name,
-                        category_id=match.category_id,
-                        category_name=match.category_name,
-                        scope=match.scope,
-                        denominator_unit=match.denominator_unit,
-                        confidence=match.confidence,
+                    activity_data={"Activity Data": "", "emission_category": ""},
+                    date_of_reporting=inv.invoice_date if inv else None,
+                    vendor_name=inv.vendor_name if inv else None,
+                ))
+                continue
+
+            for act_idx, activity in enumerate(inv.activities):
+                suggestion = None
+                if activity.activity_description:
+                    match = category_matcher.match_category(
+                        activity.activity_description,
+                        site_id=site_id,
+                        category_id=category_id,
                     )
+                    if match:
+                        suggestion = CategorySuggestion(
+                            emission_category_name=match.emission_category_name,
+                            category_id=match.category_id,
+                            category_name=match.category_name,
+                            scope=match.scope,
+                            denominator_unit=match.denominator_unit,
+                            confidence=match.confidence,
+                        )
 
-            # Check that the matched category has a denominator_unit defined
-            if suggestion and not suggestion.denominator_unit:
-                unit_warning = {
-                    "check": "activity_unit_defined",
-                    "ok": False,
-                    "message": (
-                        f"No activity unit defined for emission category "
-                        f"'{suggestion.emission_category_name}'"
-                        + (f" (site_id={site_id}, category_id={category_id})" if site_id and category_id else "")
-                        + ". Please configure denominator_unit in emission_factors."
-                    ),
-                    "emission_category": suggestion.emission_category_name,
-                }
-                if i < len(all_validations):
-                    all_validations[i].append(unit_warning)
-                else:
-                    all_validations.append([unit_warning])
-                logger.warning(unit_warning["message"])
-            elif not suggestion and inv and inv.activity_description:
-                no_match_warning = {
-                    "check": "activity_unit_defined",
-                    "ok": False,
-                    "message": (
-                        f"Could not match activity '{inv.activity_description}' to any emission category"
-                        + (f" for site_id={site_id}, category_id={category_id}" if site_id and category_id else "")
-                        + ". Activity unit unknown."
-                    ),
-                    "emission_category": None,
-                }
-                if i < len(all_validations):
-                    all_validations[i].append(no_match_warning)
-                else:
-                    all_validations.append([no_match_warning])
-                logger.warning(no_match_warning["message"])
+                # Validation warnings — append to this invoice's validation list
+                if suggestion and not suggestion.denominator_unit:
+                    unit_warning = {
+                        "check": "activity_unit_defined",
+                        "ok": False,
+                        "message": (
+                            f"No activity unit defined for emission category "
+                            f"'{suggestion.emission_category_name}'"
+                            + (f" (site_id={site_id}, category_id={category_id})" if site_id and category_id else "")
+                            + ". Please configure denominator_unit in emission_factors."
+                        ),
+                        "emission_category": suggestion.emission_category_name,
+                    }
+                    if inv_idx < len(all_validations):
+                        all_validations[inv_idx].append(unit_warning)
+                    else:
+                        all_validations.append([unit_warning])
+                    logger.warning(unit_warning["message"])
+                elif not suggestion and activity.activity_description:
+                    no_match_warning = {
+                        "check": "activity_unit_defined",
+                        "ok": False,
+                        "message": (
+                            f"Could not match activity '{activity.activity_description}' to any emission category"
+                            + (f" for site_id={site_id}, category_id={category_id}" if site_id and category_id else "")
+                            + ". Activity unit unknown."
+                        ),
+                        "emission_category": None,
+                    }
+                    if inv_idx < len(all_validations):
+                        all_validations[inv_idx].append(no_match_warning)
+                    else:
+                        all_validations.append([no_match_warning])
+                    logger.warning(no_match_warning["message"])
 
-            all_suggestions.append(suggestion)
+                all_suggestions.append(suggestion)
 
-            # Determine the best emission_category_name for this invoice.
-            # Priority order:
-            #   1. LLM-identified value (extracted directly from the invoice text,
-            #      constrained to the known list when available)
-            #   2. Fuzzy-matcher suggestion (activity_description → DB match)
-            #   3. Raw activity_description as last resort
-            llm_category = inv.emission_category if inv else None
-            final_emission_category = (
-                llm_category
-                or (suggestion.emission_category_name if suggestion else None)
-                or (inv.activity_description if inv else "")
-            )
+                # Priority chain for emission category:
+                #   1. LLM-identified value
+                #   2. Fuzzy-matcher suggestion
+                #   3. Raw activity_description as last resort
+                final_emission_category = (
+                    activity.emission_category
+                    or (suggestion.emission_category_name if suggestion else None)
+                    or (activity.activity_description or "")
+                )
 
-            # Build emission-ready payload (aligned with Node.js POST /emissions)
-            # Use request category_id if provided, else suggestion
-            final_category_id = category_id if category_id is not None else (suggestion.category_id if suggestion else None)
+                final_category_id = category_id if category_id is not None else (suggestion.category_id if suggestion else None)
 
-            all_emission_ready.append(EmissionReady(
-                site_id=site_id,
-                category_id=final_category_id,
-                activity_data={
-                    "Activity Data": str(inv.total_quantity) if inv and inv.total_quantity is not None else "",
-                    "emission_category": final_emission_category,
-                },
-                activity_data_unit=inv.unit_of_measurement if inv else None,
-                date_of_reporting=inv.invoice_date if inv else None,
-                total_emission=0.0,
-                unit="kg CO2e",
-                vendor_name=inv.vendor_name if inv else None,
-            ))
+                all_emission_ready.append(EmissionReady(
+                    invoice_index=inv_idx,
+                    activity_index=act_idx,
+                    site_id=site_id,
+                    category_id=final_category_id,
+                    activity_data={
+                        "Activity Data": str(activity.total_quantity) if activity.total_quantity is not None else "",
+                        "emission_category": final_emission_category,
+                    },
+                    activity_data_unit=activity.unit_of_measurement,
+                    date_of_reporting=inv.invoice_date,
+                    total_emission=0.0,
+                    unit="kg CO2e",
+                    vendor_name=inv.vendor_name,
+                ))
 
         return ExtractionResponse(
             filename=filename,
