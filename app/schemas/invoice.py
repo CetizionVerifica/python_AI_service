@@ -1,6 +1,6 @@
 
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class LineItem(BaseModel):
@@ -9,6 +9,30 @@ class LineItem(BaseModel):
     unit: Optional[str] = Field(None, description="Unit of measurement for this line item (e.g., litre, kg, kWh)")
     unit_price: Optional[float] = Field(None, description="Price per unit")
     amount: Optional[float] = Field(None, description="Total amount for the line item")
+
+
+class ActivityEntry(BaseModel):
+    """A single consumed resource/commodity extracted from an invoice."""
+    activity_description: Optional[str] = Field(
+        None,
+        description="What was consumed/purchased (e.g., Diesel, Electricity, LPG, Natural Gas, Petrol)"
+    )
+    total_quantity: Optional[float] = Field(
+        None,
+        description="Total physical quantity consumed for this activity"
+    )
+    unit_of_measurement: Optional[str] = Field(
+        None,
+        description="Physical unit of measurement (e.g., litre, kg, kWh, m³, gallon, tonne)"
+    )
+    emission_category: Optional[str] = Field(
+        None,
+        description="Matched emission category name from the known list provided in context"
+    )
+    column_values: Optional[dict[str, str]] = Field(
+        None,
+        description="Extracted dropdown field values keyed by column name (e.g., {'Waste Type': 'Process Organic Waste', 'Disposal Method': 'Incineration'})"
+    )
 
 
 class InvoiceData(BaseModel):
@@ -22,23 +46,29 @@ class InvoiceData(BaseModel):
     tax_amount: Optional[float] = Field(None, description="Total tax amount")
     line_items: List[LineItem] = Field(default_factory=list, description="List of items in the invoice")
 
-    # Emission-relevant fields
-    activity_description: Optional[str] = Field(
-        None,
-        description="What was consumed/purchased (e.g., Diesel, Electricity, LPG, Natural Gas, Petrol)"
-    )
-    total_quantity: Optional[float] = Field(
-        None,
-        description="Total physical quantity consumed (sum of line item quantities)"
-    )
-    unit_of_measurement: Optional[str] = Field(
-        None,
-        description="Physical unit of measurement (e.g., litre, kg, kWh, m³, gallon, tonne)"
-    )
-    emission_category: Optional[str] = Field(
-        None,
-        description="Matched emission category name from the known list provided in context"
-    )
+    # Multiple activities per invoice
+    activities: List[ActivityEntry] = Field(default_factory=list, description="Distinct resources/commodities consumed in this invoice")
+
+    # Backward-compatible computed fields — return first activity's values
+    @computed_field
+    @property
+    def activity_description(self) -> Optional[str]:
+        return self.activities[0].activity_description if self.activities else None
+
+    @computed_field
+    @property
+    def total_quantity(self) -> Optional[float]:
+        return self.activities[0].total_quantity if self.activities else None
+
+    @computed_field
+    @property
+    def unit_of_measurement(self) -> Optional[str]:
+        return self.activities[0].unit_of_measurement if self.activities else None
+
+    @computed_field
+    @property
+    def emission_category(self) -> Optional[str]:
+        return self.activities[0].emission_category if self.activities else None
 
 
 class CategorySuggestion(BaseModel):
@@ -51,7 +81,9 @@ class CategorySuggestion(BaseModel):
 
 
 class EmissionReady(BaseModel):
-    """Pre-built payload for Node.js POST /emissions — one per invoice."""
+    """Pre-built payload for Node.js POST /emissions — one per activity."""
+    invoice_index: int = 0
+    activity_index: int = 0
     site_id: Optional[int] = None
     category_id: Optional[int] = None
     activity_data: dict = {}

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/hayyan/code/ESG/ESG-lite_FE/src/**)"
+    ]
+  }
+}
