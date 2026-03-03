@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.invoices import router as api_router
 from app.api.categories import router as categories_router
 from app.core.logging import setup_logging
+from app.api.excel import router as excel_router
+from app.core.database import ensure_uploaded_documents_table
 
 # Setup Logging
 setup_logging()
@@ -24,6 +26,7 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/v1")
 app.include_router(categories_router, prefix="/v1")
+app.include_router(excel_router, prefix="/v1")
 
 @app.get("/health")
 def health_check():

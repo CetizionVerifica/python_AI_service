@@ -1,10 +1,14 @@
 
 import logging
+import json
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values, Json
 from app.core.config import settings
 
+
 logger = logging.getLogger(__name__)
+
+EMISSION_TABLE = "emission"  # change if your table name differs
 
 def get_connection():
     """Get a database connection to emissions_db."""
@@ -215,3 +219,336 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
         return None
     finally:
         conn.close()
+
+def ensure_uploaded_documents_table():
+    """
+    Creates the uploaded_documents table (once).
+    Call this on FastAPI startup.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS uploaded_documents (
+                    id BIGSERIAL PRIMARY KEY,
+                    document_name TEXT NOT NULL,
+                    cloudinary_url TEXT NOT NULL,
+                    cloudinary_public_id TEXT,
+                    public_url TEXT,
+                    file_type TEXT,
+                    file_size BIGINT,
+                    total_rows BIGINT,
+                    status TEXT NOT NULL DEFAULT 'uploaded',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                """
+            )
+
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_uploaded_documents_created_at ON uploaded_documents(created_at DESC);"
+            )
+
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB ensure_uploaded_documents_table failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def insert_uploaded_document(
+    document_name: str,
+    cloudinary_url: str,
+    cloudinary_public_id: str | None = None,
+    public_url: str | None = None,
+    file_type: str | None = None,
+    file_size: int | None = None,
+) -> dict:
+    """
+    Insert an uploaded document record and return the inserted row (includes id).
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO uploaded_documents (
+                    document_name,
+                    cloudinary_url,
+                    cloudinary_public_id,
+                    public_url,
+                    file_type,
+                    file_size
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    document_name,
+                    cloudinary_url,
+                    cloudinary_public_id,
+                    public_url,
+                    file_type,
+                    file_size,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row)
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB insert_uploaded_document failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def get_uploaded_document_by_id(document_id: int) -> dict | None:
+    """
+    Fetch a single uploaded document by id.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM uploaded_documents WHERE id = %s", (document_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_uploaded_document(
+    document_id: int,
+    *,
+    status: str | None = None,
+    total_rows: int | None = None,
+) -> dict | None:
+    """
+    Update status/total_rows and return updated row.
+    """
+    fields = []
+    params = []
+
+    if status is not None:
+        fields.append("status = %s")
+        params.append(status)
+
+    if total_rows is not None:
+        fields.append("total_rows = %s")
+        params.append(total_rows)
+
+    # Always touch updated_at if anything changes
+    if not fields:
+        return get_uploaded_document_by_id(document_id)
+
+    fields.append("updated_at = NOW()")
+    params.append(document_id)
+
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                UPDATE uploaded_documents
+                SET {", ".join(fields)}
+                WHERE id = %s
+                RETURNING *
+                """,
+                tuple(params),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB update_uploaded_document failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+
+def get_emission_factor(
+    site_id: int,
+    category_id: int,
+    year: int,
+    emission_category_name: str,
+) -> dict | None:
+    """
+    Tries (site_id, category_id, year, emission_category_name).
+    If not found -> fallback (site_id, category_id, emission_category_name).
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM emission_factors
+                WHERE site_id = %s
+                  AND category_id = %s
+                  AND emission_category_name = %s
+                  AND year = %s
+                LIMIT 1
+                """,
+                (site_id, category_id, emission_category_name, year),
+            )
+            row = cur.fetchone()
+            if row:
+                return dict(row)
+
+            cur.execute(
+                """
+                SELECT *
+                FROM emission_factors
+                WHERE site_id = %s
+                  AND category_id = %s
+                  AND emission_category_name = %s
+                ORDER BY year DESC
+                LIMIT 1
+                """,
+                (site_id, category_id, emission_category_name),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+
+def bulk_insert_emissions(rows: list[dict], page_size: int = 2000) -> int:
+    """
+    Inserts emissions in bulk with execute_values (fast).
+    Expected keys per row:
+      site_id, category_id, activity_data (dict), total_emission (float),
+      unit (str), date_of_reporting (str or date), activity_data_unit (str|None),
+      created_by (int|None)
+    """
+    if not rows:
+        return 0
+
+    values = []
+    for r in rows:
+        values.append(
+            (
+                r["site_id"],
+                r["category_id"],
+                json.dumps(r["activity_data"]),
+                r["total_emission"],
+                r.get("unit") or "tCO2e",
+                r["date_of_reporting"],
+                r.get("activity_data_unit"),
+                r.get("created_by"),
+            )
+        )
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                f"""
+                INSERT INTO {EMISSION_TABLE}
+                  (site_id, category_id, activity_data, total_emission, unit,
+                   date_of_reporting, activity_data_unit, created_by)
+                VALUES %s
+                """,
+                values,
+                page_size=page_size,
+            )
+            inserted = len(values)
+            conn.commit()
+            return inserted
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB bulk_insert_emissions failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def fetch_emission_factor(
+    conn,
+    site_id: int,
+    category_id: int,
+    year: int,
+    emission_category_name: str,
+) -> dict | None:
+    """
+    Fetch emission factor using an existing connection (for shared transactions).
+    Tries exact year first, then falls back to any year (latest).
+    """
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT factor_value, denominator_unit
+            FROM emission_factors
+            WHERE site_id = %s
+              AND category_id = %s
+              AND year = %s
+              AND emission_category_name = %s
+            LIMIT 1
+            """,
+            (site_id, category_id, year, emission_category_name),
+        )
+        row = cur.fetchone()
+        if row:
+            return dict(row)
+
+        # fallback without year (same as Node fallback)
+        cur.execute(
+            """
+            SELECT factor_value, denominator_unit
+            FROM emission_factors
+            WHERE site_id = %s
+              AND category_id = %s
+              AND emission_category_name = %s
+            LIMIT 1
+            """,
+            (site_id, category_id, emission_category_name),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+
+def bulk_insert_emissions_with_conn(conn, rows: list[dict]) -> int:
+    """
+    Insert many rows into emission table using an existing connection.
+    Caller commits/rollbacks.
+    """
+    if not rows:
+        return 0
+
+    values = []
+    for r in rows:
+        activity_data = r["activity_data"]
+        values.append(
+            (
+                r["site_id"],
+                r["category_id"],
+                Json(activity_data) if isinstance(activity_data, dict) else activity_data,  # ✅ FIX
+                r["total_emission"],
+                r.get("unit") or "tCO2e",
+                r["date_of_reporting"],
+                r.get("activity_data_unit"),
+            )
+        )
+
+    with conn.cursor() as cur:
+        execute_values(
+            cur,
+            f"""
+            INSERT INTO {EMISSION_TABLE}
+              (site_id, category_id, activity_data, total_emission, unit,
+               date_of_reporting, activity_data_unit)
+            VALUES %s
+            """,
+            values,
+            page_size=2000,
+        )
+
+    return len(values)
