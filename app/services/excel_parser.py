@@ -1,0 +1,524 @@
+import logging
+from pathlib import Path
+from typing import Optional
+
+import openpyxl
+
+from app.services.llm import _call_openrouter, _parse_json_object
+from app.schemas.emission_factor import (
+    SpreadsheetSchema,
+    EmissionFactorRecord,
+    ParseExcelResponse,
+    DbCategory,
+    CategorySuggestion,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Unit normalisation — strip qualifiers like "of material", "of waste" etc.
+# "ton of material" → "ton",  "per passenger.km" → "passenger.km"
+# ---------------------------------------------------------------------------
+
+import re
+
+_UNIT_STRIP_PATTERNS = [
+    # "X of <something>" — keep only X
+    re.compile(r"^(.+?)\s+of\s+\w.*$", re.IGNORECASE),
+    # leading "per " — drop it
+    re.compile(r"^per\s+(.+)$", re.IGNORECASE),
+]
+
+
+def _normalise_unit(raw: str) -> str:
+    """
+    Clean a denominator unit extracted from an emission factor sheet.
+
+    Examples:
+        "ton of material"   → "ton"
+        "tonnes of waste"   → "tonnes"
+        "per passenger.km"  → "passenger.km"
+        "USD"               → "USD"
+        "kWh"               → "kWh"
+    """
+    text = raw.strip()
+    for pat in _UNIT_STRIP_PATTERNS:
+        m = pat.match(text)
+        if m:
+            text = m.group(1).strip()
+    return text
+
+
+# ---------------------------------------------------------------------------
+# System prompt for Pass 1: LLM schema detection
+# ---------------------------------------------------------------------------
+
+SCHEMA_DETECTION_PROMPT = """\
+You are an expert at analyzing Excel spreadsheet structures for emission factor data.
+
+You will receive the first ~20 rows of an Excel spreadsheet, represented as a list of
+rows where each row is a list of (cell_value, column_index) tuples for non-empty cells.
+Column indices are 1-based (A=1, B=2, ...).
+
+Your task is to identify the STRUCTURE of this spreadsheet so that a program can
+deterministically extract all data rows. Analyze the header rows to determine:
+
+1. LAYOUT TYPE — one of three patterns:
+   - "simple": One factor value per year per row.
+     Each year has exactly 1 value column.
+   - "sub_columns": Multiple sub-columns per year (e.g. Direct, WTT, Total).
+     Each year repeats the same set of sub-columns. The program will pick one
+     sub-column (typically "Total") as the factor value.
+   - "disposal_pivot": Multiple disposal/treatment method columns per year
+     (e.g. Re-use, Open loop, Closed loop, Combustion, Composting, Landfilled,
+     Anaerobically digested). Each disposal column × each data row = a separate
+     emission factor record.
+
+2. DESCRIPTOR COLUMNS — which columns contain text descriptors that together form
+   the emission_category_name. These are text columns to the LEFT of the numeric
+   factor data. Report them in left-to-right order. Exclude:
+   - Broad "Category" or "Method of calculation" columns that are the same for all rows
+   - Source / UOM columns
+   Only include columns whose values differentiate emission factor records.
+
+3. PARENT CATEGORY COLUMN — an optional grouping column (e.g. "Stationary Combustion",
+   "Mobile Combustion", "Road", "Air"). Rows with a value ONLY in this column and no
+   numeric data are group headers. Set `include_parent_in_name` to true ONLY if the
+   same descriptor values appear under different parents and need disambiguation
+   (e.g. "Diesel" under both "Stationary Combustion" and "Mobile Combustion").
+
+4. UNIT COLUMN — which column (if any) contains the unit of measurement (UOM).
+
+5. SOURCE COLUMN — which column (if any) contains the data source (e.g. "DEFRA").
+
+6. DATA START ROW — the first row number containing actual data values (not headers).
+
+7. YEAR COLUMNS — for each year detected:
+   - "simple": provide `value_column` (the column index).
+   - "sub_columns": provide `sub_columns` (list of {name, column_index}) and
+     `primary_sub_column` (name of the sub-column to use, usually "Total").
+   - "disposal_pivot": provide `disposal_columns` (list of {name, column_index}).
+
+Return ONLY a JSON object with this exact structure (no extra text):
+{
+  "layout_type": "simple" | "sub_columns" | "disposal_pivot",
+  "descriptor_columns": [
+    {"column_index": <int>, "header_name": "<string>"}
+  ],
+  "parent_category_column": {"column_index": <int>, "header_name": "<string>"} | null,
+  "include_parent_in_name": true | false,
+  "source_column": {"column_index": <int>, "header_name": "<string>"} | null,
+  "unit_column": {"column_index": <int>, "header_name": "<string>"} | null,
+  "data_start_row": <int>,
+  "years": [
+    {
+      "year": <int>,
+      "value_column": <int or null>,
+      "sub_columns": [{"name": "<string>", "column_index": <int>}] | null,
+      "primary_sub_column": "<string>" | null,
+      "disposal_columns": [{"name": "<string>", "column_index": <int>}] | null
+    }
+  ],
+  "descriptor_join_separator": " - ",
+  "notes": "<any observations about the data>"
+}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Pass 1 helpers
+# ---------------------------------------------------------------------------
+
+def _read_header_rows(ws, max_rows: int = 20) -> str:
+    """Read first N rows of worksheet, format as (value, column_index) tuples."""
+    lines: list[str] = []
+    for row in ws.iter_rows(
+        min_row=1, max_row=min(max_rows, ws.max_row), values_only=False
+    ):
+        row_num = row[0].row
+        cells = [
+            (cell.value, cell.column)
+            for cell in row
+            if cell.value is not None
+        ]
+        if cells:
+            lines.append(f"Row {row_num}: {cells}")
+    return "\n".join(lines)
+
+
+def _detect_schema(header_text: str) -> SpreadsheetSchema:
+    """Pass 1: Send header rows to LLM for structure detection."""
+    messages = [
+        {"role": "system", "content": SCHEMA_DETECTION_PROMPT},
+        {"role": "user", "content": f"SPREADSHEET ROWS:\n{header_text}"},
+    ]
+    logger.info("Pass 1: Calling LLM for schema detection")
+    raw_response = _call_openrouter(messages)
+    schema_dict = _parse_json_object(raw_response)
+    logger.info(f"Pass 1: LLM returned schema: layout_type={schema_dict.get('layout_type')}")
+    return SpreadsheetSchema(**schema_dict)
+
+
+# ---------------------------------------------------------------------------
+# Pass 2: Deterministic extraction
+# ---------------------------------------------------------------------------
+
+def _parse_numeric(value, precision: int = 6) -> Optional[float]:
+    """Safely convert a cell value to float, returning None for non-numeric.
+
+    Rounds to *precision* decimal places to strip floating-point noise
+    that arises from Excel formula caching (e.g. 0.74994 stored as
+    0.7499399999999999).
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if isinstance(value, bool):
+            return None
+        return round(float(value), precision)
+    s = str(value).strip()
+    if s in ("", "-", "N/A", "n/a", "NA", "na", "#N/A", "#REF!", "#VALUE!"):
+        return None
+    try:
+        return round(float(s), precision)
+    except ValueError:
+        return None
+
+
+def _extract_factors(
+    ws, schema: SpreadsheetSchema
+) -> tuple[list[EmissionFactorRecord], list[str]]:
+    """
+    Pass 2: Use detected schema to programmatically read all data rows.
+    No LLM involved — purely deterministic openpyxl reads.
+    """
+    factors: list[EmissionFactorRecord] = []
+    warnings: list[str] = []
+
+    current_parent: Optional[str] = None
+    last_unit: Optional[str] = None
+    last_source: Optional[str] = None
+    # Forward-fill for merged descriptor cells: column_index -> last non-empty value
+    last_descriptors: dict[int, str] = {}
+
+    for row in ws.iter_rows(
+        min_row=schema.data_start_row, max_row=ws.max_row, values_only=False
+    ):
+        row_num = row[0].row
+        # Build a column_index -> cell_value lookup
+        cells: dict[int, any] = {cell.column: cell.value for cell in row}
+
+        # --- Track parent category (for group-header rows) ---
+        if schema.parent_category_column:
+            parent_val = cells.get(schema.parent_category_column.column_index)
+            if parent_val is not None and str(parent_val).strip():
+                current_parent = str(parent_val).strip()
+
+        # --- Build emission_category_name from descriptors ---
+        # Forward-fill handles merged cells: when a cell is empty, use the
+        # last value for that column.  When a cell has a new value, reset
+        # all columns to its right so stale child-level values don't leak.
+        descriptor_parts: list[str] = []
+        if schema.include_parent_in_name and current_parent:
+            descriptor_parts.append(current_parent)
+
+        has_any_explicit = False  # track if row has at least one real cell
+        for i, desc_col in enumerate(schema.descriptor_columns):
+            val = cells.get(desc_col.column_index)
+            val_str = str(val).strip() if val is not None else ""
+
+            if val_str and val_str != "-":
+                # Explicit value — update forward-fill and reset downstream
+                has_any_explicit = True
+                last_descriptors[desc_col.column_index] = val_str
+                for j in range(i + 1, len(schema.descriptor_columns)):
+                    last_descriptors.pop(
+                        schema.descriptor_columns[j].column_index, None
+                    )
+                descriptor_parts.append(val_str)
+            elif desc_col.column_index in last_descriptors:
+                # Empty / merged cell — use forward-filled value
+                descriptor_parts.append(last_descriptors[desc_col.column_index])
+            # else: truly empty and no previous value, skip
+
+        if not descriptor_parts or (
+            not has_any_explicit
+            and not schema.include_parent_in_name
+        ):
+            continue  # Skip empty / group-header rows with no descriptors
+
+        emission_category_name = schema.descriptor_join_separator.join(
+            descriptor_parts
+        )
+
+        # --- Source and unit ---
+        source: Optional[str] = None
+        if schema.source_column:
+            src_val = cells.get(schema.source_column.column_index)
+            if src_val is not None and str(src_val).strip():
+                source = str(src_val).strip()
+                last_source = source
+            elif last_source:
+                source = last_source
+
+        denominator_unit: Optional[str] = None
+        if schema.unit_column:
+            unit_val = cells.get(schema.unit_column.column_index)
+            if unit_val is not None and str(unit_val).strip():
+                raw_unit = str(unit_val).strip()
+                # Extract just the denominator (e.g. "KgCO2e/USD" → "USD")
+                denominator_unit = raw_unit.split("/", 1)[1].strip() if "/" in raw_unit else raw_unit
+                # Normalise: "ton of material" → "ton", "per passenger.km" → "passenger.km"
+                denominator_unit = _normalise_unit(denominator_unit)
+                last_unit = denominator_unit
+            elif last_unit:
+                denominator_unit = last_unit
+                warnings.append(
+                    f"Row {row_num}: Empty unit cell, inherited '{last_unit}' from previous row"
+                )
+
+        # --- Extract factor values based on layout type ---
+        row_has_data = False
+
+        for year_map in schema.years:
+            if schema.layout_type == "simple":
+                if year_map.value_column is None:
+                    continue
+                value = cells.get(year_map.value_column)
+                factor = _parse_numeric(value)
+                if factor is not None:
+                    row_has_data = True
+                    factors.append(
+                        EmissionFactorRecord(
+                            year=year_map.year,
+                            factor_value=factor,
+                            denominator_unit=denominator_unit,
+                            source=source,
+                            emission_category_name=emission_category_name,
+                            parent_category=current_parent,
+                        )
+                    )
+
+            elif schema.layout_type == "sub_columns":
+                # Find the primary sub-column (e.g., "Total")
+                total_col: Optional[int] = None
+                for sc in year_map.sub_columns or []:
+                    if sc.name == year_map.primary_sub_column:
+                        total_col = sc.column_index
+                        break
+                if total_col is None:
+                    continue
+                value = cells.get(total_col)
+                factor = _parse_numeric(value)
+                if factor is not None:
+                    row_has_data = True
+                    factors.append(
+                        EmissionFactorRecord(
+                            year=year_map.year,
+                            factor_value=factor,
+                            denominator_unit=denominator_unit,
+                            source=source,
+                            emission_category_name=emission_category_name,
+                            parent_category=current_parent,
+                        )
+                    )
+
+            elif schema.layout_type == "disposal_pivot":
+                # Each disposal column produces a separate record
+                for disp_col in year_map.disposal_columns or []:
+                    value = cells.get(disp_col.column_index)
+                    factor = _parse_numeric(value)
+                    if factor is not None:
+                        row_has_data = True
+                        pivot_name = (
+                            f"{emission_category_name}"
+                            f"{schema.descriptor_join_separator}"
+                            f"{disp_col.name}"
+                        )
+                        factors.append(
+                            EmissionFactorRecord(
+                                year=year_map.year,
+                                factor_value=factor,
+                                denominator_unit=denominator_unit,
+                                source=source,
+                                emission_category_name=pivot_name,
+                                parent_category=current_parent,
+                            )
+                        )
+
+        if not row_has_data and descriptor_parts:
+            # This might be a group-header row — not a warning
+            pass
+
+    return factors, warnings
+
+
+# ---------------------------------------------------------------------------
+# Post-processing: disambiguate duplicate names with different units
+# ---------------------------------------------------------------------------
+
+def _disambiguate_by_unit(
+    factors: list[EmissionFactorRecord],
+) -> list[EmissionFactorRecord]:
+    """
+    When the same emission_category_name appears with different denominator_units
+    (e.g. "Road - Van - Diesel" at both tonne.km and km), append a unit-based
+    suffix to make them unique.
+    """
+    from collections import defaultdict
+
+    name_units: dict[str, set[str]] = defaultdict(set)
+    for f in factors:
+        if f.emission_category_name and f.denominator_unit:
+            name_units[f.emission_category_name].add(f.denominator_unit)
+
+    # Only names that appear with 2+ different units need disambiguation
+    ambiguous = {name for name, units in name_units.items() if len(units) > 1}
+    if not ambiguous:
+        return factors
+
+    def _unit_suffix(unit: str) -> str:
+        """Extract the meaningful denominator part: 'Kg CO2e/tonne.km' → 'tonne.km'"""
+        if "/" in unit:
+            return unit.split("/", 1)[1].strip()
+        return unit
+
+    result: list[EmissionFactorRecord] = []
+    for f in factors:
+        if f.emission_category_name in ambiguous and f.denominator_unit:
+            suffix = _unit_suffix(f.denominator_unit)
+            result.append(
+                f.model_copy(
+                    update={
+                        "emission_category_name": f"{f.emission_category_name} [{suffix}]"
+                    }
+                )
+            )
+        else:
+            result.append(f)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def parse_emission_factor_excel(
+    file_path: Path, filename: str
+) -> ParseExcelResponse:
+    """Main entry: two-pass Excel parsing."""
+    wb = openpyxl.load_workbook(str(file_path), data_only=True)
+    ws = wb.active
+
+    # Pass 1: Schema detection via LLM
+    header_text = _read_header_rows(ws, max_rows=20)
+    logger.info(f"Pass 1: Detecting schema for {filename}")
+    schema = _detect_schema(header_text)
+    logger.info(
+        f"Detected layout: {schema.layout_type}, "
+        f"years: {[y.year for y in schema.years]}, "
+        f"descriptors: {[d.header_name for d in schema.descriptor_columns]}"
+    )
+
+    # Pass 2: Deterministic extraction
+    logger.info(f"Pass 2: Extracting factors from {filename}")
+    factors, warnings = _extract_factors(ws, schema)
+
+    wb.close()
+
+    # Pass 3: Disambiguate duplicate names that differ only by unit
+    factors = _disambiguate_by_unit(factors)
+
+    available_years = sorted(set(f.year for f in factors))
+    parent_categories = sorted(
+        set(f.parent_category for f in factors if f.parent_category)
+    )
+
+    logger.info(
+        f"Extracted {len(factors)} emission factor records "
+        f"across years {available_years} from {filename}"
+    )
+
+    return ParseExcelResponse(
+        filename=filename,
+        factors=factors,
+        schema_detected=schema,
+        warnings=warnings,
+        total_records=len(factors),
+        available_years=available_years,
+        parent_categories=parent_categories,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Category inference via LLM
+# ---------------------------------------------------------------------------
+
+CATEGORY_INFERENCE_PROMPT = """\
+You are an expert at matching emission factor categories.
+
+You will receive:
+1. A list of PARENT CATEGORIES extracted from an Excel emission factor spreadsheet.
+2. A list of DATABASE CATEGORIES (each with an id and name) from the user's system.
+
+Your task is to match each parent category to the most appropriate database category.
+Consider semantic similarity, not just exact string matching. For example:
+- "Stationary Combustion" might match "Scope 1 - Stationary Combustion"
+- "Business travel" might match "Business Travel" or "Scope 3 - Business Travel"
+- "Downstream transportation and distribustion" (note typo) should still match "Downstream Transportation"
+
+For each parent category, assign a confidence level:
+- "high": Very clear match (near-exact or obvious semantic equivalence)
+- "medium": Reasonable match but some ambiguity
+- "low": No good match found
+
+If no database category is a reasonable match, set suggested_category_id to null.
+
+Return ONLY a JSON object (no extra text):
+{
+  "suggestions": [
+    {
+      "parent_category": "<exact parent category string>",
+      "suggested_category_id": <int or null>,
+      "suggested_category_name": "<name of matched DB category or null>",
+      "confidence": "high" | "medium" | "low"
+    }
+  ]
+}
+"""
+
+
+def infer_category_mapping(
+    parent_categories: list[str],
+    db_categories: list[DbCategory],
+) -> list[CategorySuggestion]:
+    """Use LLM to match Excel parent categories to DB categories."""
+    user_content = (
+        f"PARENT CATEGORIES FROM EXCEL:\n"
+        f"{parent_categories}\n\n"
+        f"DATABASE CATEGORIES:\n"
+        f"{[{'id': c.id, 'name': c.name} for c in db_categories]}"
+    )
+
+    messages = [
+        {"role": "system", "content": CATEGORY_INFERENCE_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    logger.info(
+        f"Category inference: matching {len(parent_categories)} parent categories "
+        f"against {len(db_categories)} DB categories"
+    )
+    raw_response = _call_openrouter(messages)
+    result = _parse_json_object(raw_response)
+
+    suggestions = [
+        CategorySuggestion(**item) for item in result.get("suggestions", [])
+    ]
+
+    logger.info(
+        f"Category inference complete: "
+        f"{sum(1 for s in suggestions if s.suggested_category_id is not None)} matched"
+    )
+    return suggestions

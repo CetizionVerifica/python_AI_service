@@ -3,10 +3,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.invoices import router as api_router
 from app.api.categories import router as categories_router
+from app.api.emission_factors import router as emission_factors_router
+from app.api.category_mapping import router as category_mapping_router
+from app.api.column_config import router as column_config_router
 from app.core.logging import setup_logging
+from app.core.database import ensure_emission_factor_uploads_table
 
 # Setup Logging
 setup_logging()
+
+# Ensure tables exist
+try:
+    ensure_emission_factor_uploads_table()
+except Exception:
+    pass  # logged inside the function
 
 app = FastAPI(
     title="OCR Invoice Extraction API",
@@ -24,6 +34,9 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/v1")
 app.include_router(categories_router, prefix="/v1")
+app.include_router(emission_factors_router, prefix="/v1")
+app.include_router(category_mapping_router, prefix="/v1")
+app.include_router(column_config_router, prefix="/v1")
 
 @app.get("/health")
 def health_check():

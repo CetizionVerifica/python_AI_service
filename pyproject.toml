@@ -21,4 +21,5 @@ dependencies = [
     "rapidfuzz",
     "tenacity",
     "uvicorn",
+    "openpyxl>=3.1.0",
 ]

@@ -156,6 +156,175 @@ def bulk_delete_invoices(invoice_ids: list[int]) -> list[dict]:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Emission Factor Uploads table
+# ---------------------------------------------------------------------------
+
+def ensure_emission_factor_uploads_table():
+    """Create the emission_factor_uploads table if it does not exist."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS emission_factor_uploads (
+                    id SERIAL PRIMARY KEY,
+                    file_name VARCHAR(500) NOT NULL,
+                    cloudinary_url TEXT NOT NULL,
+                    cloudinary_public_id VARCHAR(500) NOT NULL,
+                    file_size INTEGER,
+                    uploaded_by INTEGER,
+                    site_id INTEGER,
+                    category_ids INTEGER[],
+                    layout_type VARCHAR(100),
+                    total_records INTEGER DEFAULT 0,
+                    records_created INTEGER DEFAULT 0,
+                    records_skipped INTEGER DEFAULT 0,
+                    status VARCHAR(50) DEFAULT 'parsed',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            conn.commit()
+            logger.info("Ensured emission_factor_uploads table exists")
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Failed to create emission_factor_uploads table: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def insert_emission_factor_upload(
+    file_name: str,
+    cloudinary_url: str,
+    cloudinary_public_id: str,
+    file_size: int | None = None,
+    uploaded_by: int | None = None,
+    site_id: int | None = None,
+    category_ids: list[int] | None = None,
+    layout_type: str | None = None,
+    total_records: int = 0,
+) -> dict:
+    """Insert a new emission factor upload record."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO emission_factor_uploads (
+                    file_name, cloudinary_url, cloudinary_public_id,
+                    file_size, uploaded_by, site_id, category_ids,
+                    layout_type, total_records
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    file_name, cloudinary_url, cloudinary_public_id,
+                    file_size, uploaded_by, site_id, category_ids,
+                    layout_type, total_records,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row)
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB insert_emission_factor_upload failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def update_emission_factor_upload_results(
+    upload_id: int,
+    records_created: int,
+    records_skipped: int,
+    status: str = "completed",
+) -> dict | None:
+    """Update an upload record with final results after bulk create."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE emission_factor_uploads
+                SET records_created = %s,
+                    records_skipped = %s,
+                    status = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (records_created, records_skipped, status, upload_id),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB update_emission_factor_upload_results failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def get_emission_factor_uploads(uploaded_by: int | None = None) -> list:
+    """Get all emission factor uploads, newest first."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = "SELECT * FROM emission_factor_uploads WHERE 1=1"
+            params = []
+            if uploaded_by:
+                query += " AND uploaded_by = %s"
+                params.append(uploaded_by)
+            query += " ORDER BY created_at DESC"
+            cur.execute(query, params)
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def delete_emission_factor_upload(upload_id: int) -> dict | None:
+    """Delete an upload record and return it (for Cloudinary cleanup)."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "DELETE FROM emission_factor_uploads WHERE id = %s RETURNING *",
+                (upload_id,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB delete_emission_factor_upload failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def bulk_delete_emission_factor_uploads(upload_ids: list[int]) -> list[dict]:
+    """Bulk delete upload records and return deleted rows (for Cloudinary cleanup)."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "DELETE FROM emission_factor_uploads WHERE id = ANY(%s) RETURNING *",
+                (upload_ids,),
+            )
+            rows = cur.fetchall()
+            conn.commit()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB bulk_delete_emission_factor_uploads failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
 def fetch_column_config(site_id: int, category_id: int) -> dict | None:
     """
     Fetch column_config with associated column details for a site+category.
