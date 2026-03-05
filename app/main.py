@@ -7,7 +7,8 @@ from app.api.emission_factors import router as emission_factors_router
 from app.api.category_mapping import router as category_mapping_router
 from app.api.column_config import router as column_config_router
 from app.core.logging import setup_logging
-from app.core.database import ensure_emission_factor_uploads_table
+from app.api.excel import router as excel_router
+from app.core.database import ensure_emission_factor_uploads_table, ensure_uploaded_documents_table
 
 # Setup Logging
 setup_logging()
@@ -17,6 +18,11 @@ try:
     ensure_emission_factor_uploads_table()
 except Exception:
     pass  # logged inside the function
+
+try:
+    ensure_uploaded_documents_table()
+except Exception:
+    pass
 
 app = FastAPI(
     title="OCR Invoice Extraction API",
@@ -37,6 +43,7 @@ app.include_router(categories_router, prefix="/v1")
 app.include_router(emission_factors_router, prefix="/v1")
 app.include_router(category_mapping_router, prefix="/v1")
 app.include_router(column_config_router, prefix="/v1")
+app.include_router(excel_router, prefix="/v1")
 
 @app.get("/health")
 def health_check():

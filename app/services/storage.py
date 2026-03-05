@@ -60,3 +60,17 @@ def cleanup(file_path: Path):
             logger.debug(f"Cleaned up temporary file: {file_path}")
     except Exception as e:
         logger.warning(f"Error cleaning up file {file_path}: {e}")
+
+async def save_temp_file_from_bytes(contents: bytes, filename: str) -> Path:
+    """
+    Saves raw bytes to the temporary directory with a unique name.
+    """
+    file_id = str(uuid.uuid4())
+    extension = os.path.splitext(filename)[1] if filename else ""
+    file_path = Path(settings.TEMP_DIR) / f"{file_id}{extension}"
+
+    with open(file_path, "wb") as f:
+        f.write(contents)
+
+    logger.debug(f"Temp file saved to {file_path}")
+    return file_path
