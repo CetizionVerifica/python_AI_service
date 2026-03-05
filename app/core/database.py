@@ -2,6 +2,7 @@
 import logging
 import json
 import psycopg2
+from psycopg2 import pool as _pg_pool
 from psycopg2.extras import RealDictCursor, execute_values, Json
 from app.core.config import settings
 
@@ -10,15 +11,46 @@ logger = logging.getLogger(__name__)
 
 EMISSION_TABLE = "emission"  # change if your table name differs
 
+# ---------------------------------------------------------------------------
+# Connection pool (reuses TCP connections instead of creating new ones)
+# ---------------------------------------------------------------------------
+_pool: _pg_pool.SimpleConnectionPool | None = None
+
+
+def _get_pool() -> _pg_pool.SimpleConnectionPool:
+    global _pool
+    if _pool is None or _pool.closed:
+        _pool = _pg_pool.SimpleConnectionPool(
+            minconn=2,
+            maxconn=10,
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            user=settings.DB_USERNAME,
+            password=settings.DB_PASSWORD,
+            dbname=settings.DB_NAME,
+        )
+    return _pool
+
+
 def get_connection():
-    """Get a database connection to emissions_db."""
-    return psycopg2.connect(
-        host=settings.DB_HOST,
-        port=settings.DB_PORT,
-        user=settings.DB_USERNAME,
-        password=settings.DB_PASSWORD,
-        dbname=settings.DB_NAME,
-    )
+    """Get a database connection from the pool."""
+    return _get_pool().getconn()
+
+
+def release_connection(conn):
+    """Return a connection to the pool instead of closing it."""
+    try:
+        # Always rollback any open transaction before returning to pool.
+        # This ensures the next user of this connection gets a clean state.
+        # (Calling rollback after commit is harmless — it's a no-op.)
+        conn.rollback()
+        _get_pool().putconn(conn)
+    except Exception:
+        # If pool is closed or conn is bad, just close it directly
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def insert_invoice(
@@ -56,7 +88,7 @@ def insert_invoice(
         logger.error(f"DB insert_invoice failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def update_invoice_ocr(invoice_id: int, ocr_text: dict) -> dict:
@@ -82,7 +114,7 @@ def update_invoice_ocr(invoice_id: int, ocr_text: dict) -> dict:
         logger.error(f"DB update_invoice_ocr failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def get_invoices(site_id: int | None = None, category_id: int | None = None, uploaded_by: int | None = None) -> list:
@@ -105,7 +137,7 @@ def get_invoices(site_id: int | None = None, category_id: int | None = None, upl
             cur.execute(query, params)
             return [dict(row) for row in cur.fetchall()]
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def get_invoice_by_id(invoice_id: int) -> dict | None:
@@ -117,7 +149,7 @@ def get_invoice_by_id(invoice_id: int) -> dict | None:
             row = cur.fetchone()
             return dict(row) if row else None
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def delete_invoice(invoice_id: int) -> dict | None:
@@ -137,7 +169,7 @@ def delete_invoice(invoice_id: int) -> dict | None:
         logger.error(f"DB delete_invoice failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def bulk_delete_invoices(invoice_ids: list[int]) -> list[dict]:
@@ -157,7 +189,7 @@ def bulk_delete_invoices(invoice_ids: list[int]) -> list[dict]:
         logger.error(f"DB bulk_delete_invoices failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +227,7 @@ def ensure_emission_factor_uploads_table():
         logger.error(f"Failed to create emission_factor_uploads table: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def insert_emission_factor_upload(
@@ -236,7 +268,7 @@ def insert_emission_factor_upload(
         logger.error(f"DB insert_emission_factor_upload failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def update_emission_factor_upload_results(
@@ -269,7 +301,7 @@ def update_emission_factor_upload_results(
         logger.error(f"DB update_emission_factor_upload_results failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def get_emission_factor_uploads(uploaded_by: int | None = None) -> list:
@@ -286,7 +318,7 @@ def get_emission_factor_uploads(uploaded_by: int | None = None) -> list:
             cur.execute(query, params)
             return [dict(row) for row in cur.fetchall()]
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def delete_emission_factor_upload(upload_id: int) -> dict | None:
@@ -306,7 +338,7 @@ def delete_emission_factor_upload(upload_id: int) -> dict | None:
         logger.error(f"DB delete_emission_factor_upload failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def bulk_delete_emission_factor_uploads(upload_ids: list[int]) -> list[dict]:
@@ -326,7 +358,7 @@ def bulk_delete_emission_factor_uploads(upload_ids: list[int]) -> list[dict]:
         logger.error(f"DB bulk_delete_emission_factor_uploads failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def fetch_column_config(site_id: int, category_id: int) -> dict | None:
@@ -387,7 +419,7 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
         logger.warning(f"fetch_column_config failed for site={site_id}, category={category_id}: {e}")
         return None
     finally:
-        conn.close()
+        release_connection(conn)
 
 def ensure_uploaded_documents_table():
     """
@@ -425,7 +457,7 @@ def ensure_uploaded_documents_table():
         logger.error(f"DB ensure_uploaded_documents_table failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def insert_uploaded_document(
@@ -472,7 +504,7 @@ def insert_uploaded_document(
         logger.error(f"DB insert_uploaded_document failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def get_uploaded_document_by_id(document_id: int) -> dict | None:
@@ -486,7 +518,7 @@ def get_uploaded_document_by_id(document_id: int) -> dict | None:
             row = cur.fetchone()
             return dict(row) if row else None
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def update_uploaded_document(
@@ -536,7 +568,7 @@ def update_uploaded_document(
         logger.error(f"DB update_uploaded_document failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 
@@ -584,7 +616,7 @@ def get_emission_factor(
             row = cur.fetchone()
             return dict(row) if row else None
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 
@@ -636,7 +668,7 @@ def bulk_insert_emissions(rows: list[dict], page_size: int = 2000) -> int:
         logger.error(f"DB bulk_insert_emissions failed: {e}")
         raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def fetch_emission_factor(

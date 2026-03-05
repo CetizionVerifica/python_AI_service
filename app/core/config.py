@@ -43,5 +43,5 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Ensure temp directory exists
+# Ensure directories exist
 os.makedirs(settings.TEMP_DIR, exist_ok=True)

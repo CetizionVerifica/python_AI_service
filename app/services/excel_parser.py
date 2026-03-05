@@ -1,5 +1,6 @@
 import io
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -16,7 +17,7 @@ from app.schemas.emission_factor import (
     DbCategory,
     CategorySuggestion,
 )
-from app.core.database import get_connection, get_uploaded_document_by_id, fetch_emission_factor, bulk_insert_emissions_with_conn
+from app.core.database import get_connection, release_connection, get_uploaded_document_by_id, fetch_emission_factor, bulk_insert_emissions_with_conn, fetch_column_config
 
 logger = logging.getLogger(__name__)
 
@@ -535,6 +536,36 @@ def infer_category_mapping(
 # PART 2: Data Import Excel Parser (Pavithra's bulk upload flow)
 # ===========================================================================
 
+# ---------------------------------------------------------------------------
+# In-memory file cache — avoids re-downloading from Cloudinary on each step
+# TTL = 10 minutes, auto-evicts stale entries
+# ---------------------------------------------------------------------------
+import time as _time
+
+_file_cache: dict[int, tuple[bytes, str, float]] = {}  # doc_id → (bytes, ext, timestamp)
+_FILE_CACHE_TTL = 600  # 10 minutes
+
+
+def _cache_get(document_id: int) -> tuple[bytes, str] | None:
+    entry = _file_cache.get(document_id)
+    if entry is None:
+        return None
+    content, ext, ts = entry
+    if _time.monotonic() - ts > _FILE_CACHE_TTL:
+        _file_cache.pop(document_id, None)
+        return None
+    return content, ext
+
+
+def _cache_set(document_id: int, content: bytes, ext: str) -> None:
+    # Evict stale entries (keep cache bounded)
+    now = _time.monotonic()
+    stale = [k for k, (_, _, ts) in _file_cache.items() if now - ts > _FILE_CACHE_TTL]
+    for k in stale:
+        _file_cache.pop(k, None)
+    _file_cache[document_id] = (content, ext, now)
+
+
 UNIT_CONVERSIONS = {
     "litre": {"gallon": 0.264172, "ml": 1000, "cubic meter": 0.001, "kilo litre": 0.001, "kl": 0.001},
     "kl": {"litre": 1000, "gallon": 264.172, "ml": 1000000, "cubic meter": 1},
@@ -602,24 +633,71 @@ def map_df(df: pd.DataFrame, mappings: dict[str, str]) -> pd.DataFrame:
     return pd.DataFrame(mapped).fillna("")
 
 def download_document_bytes(document_id: int) -> tuple[bytes, str]:
+    # Check in-memory cache first (avoids re-reading on each step)
+    cached = _cache_get(document_id)
+    if cached is not None:
+        return cached
+
     doc = get_uploaded_document_by_id(document_id)
     if not doc:
         raise ValueError("Invalid document_id")
 
-    url = doc["cloudinary_url"]
+    file_path = doc["cloudinary_url"]  # now stores local path
+
+    # local file path
+    if os.path.isfile(file_path):
+        with open(file_path, "rb") as f:
+            content = f.read()
+        ext = file_path.rsplit(".", 1)[-1].lower()
+        if ext not in {"csv", "xls", "xlsx"}:
+            ext = "xlsx"
+        _cache_set(document_id, content, ext)
+        return content, ext
+
+    # fallback: legacy Cloudinary URL
     try:
-        r = requests.get(url, timeout=60)
+        r = requests.get(file_path, timeout=60)
         r.raise_for_status()
     except Exception as e:
-        raise ValueError(f"Failed to download file from Cloudinary: {e}")
+        raise ValueError(f"Failed to read file: {e}")
 
-    # determine extension
-    filename = url.split("?")[0].lower()
+    filename = file_path.split("?")[0].lower()
     ext = filename.rsplit(".", 1)[-1].lower()
     if ext not in {"csv", "xls", "xlsx"}:
         ext = "xlsx"
 
+    _cache_set(document_id, r.content, ext)
     return r.content, ext
+
+def _build_category_resolver(site_id: int, category_id: int) -> dict[str, str]:
+    """
+    Build a case-insensitive lookup from display category names (as they appear
+    in uploaded files) to emission_category_name (as stored in emission_factors).
+
+    Uses column_config's emission_category_mapping JSONB:
+      Keys  = pipe-separated display names, e.g. "Project Chemicals" or "Paper|Recycled"
+      Values = actual emission_category_name for EF lookup, e.g. "Paper - Recycled"
+
+    Returns empty dict if no column_config or no mapping exists.
+    """
+    try:
+        config = fetch_column_config(site_id, category_id)
+        if not config:
+            return {}
+
+        ecm = config.get("emission_category_mapping") or {}
+        if not ecm:
+            return {}
+
+        resolver: dict[str, str] = {}
+        for display_key, ef_name in ecm.items():
+            if display_key and ef_name:
+                resolver[str(display_key).strip().lower()] = str(ef_name).strip()
+        return resolver
+    except Exception as e:
+        logger.warning(f"Failed to load column_config for category resolver: {e}")
+        return {}
+
 
 # ---------- Step 2: unique categories ----------
 def get_unique_categories(document_id: int, mappings: dict[str, str]) -> tuple[list[str], int]:
@@ -650,8 +728,6 @@ def get_preview_rows(
     df = _read_df_from_bytes(content, ext)
     mapped_df = map_df(df, mappings)
 
-    total = len(mapped_df)
-
     if selected_categories:
         selected = {c.strip() for c in selected_categories}
         if "emission_category" in mapped_df.columns:
@@ -659,37 +735,80 @@ def get_preview_rows(
                 mapped_df["emission_category"].astype(str).str.strip().isin(selected)
             ]
 
+    total = len(mapped_df)  # count AFTER category filter for correct pagination
+
     start = max(0, (page - 1) * page_size)
     end = start + page_size
     page_df = mapped_df.iloc[start:end]
+
+    # Resolve uploaded category names → EF names via column_config mapping
+    category_resolver = _build_category_resolver(site_id, category_id)
 
     conn = get_connection()
     try:
         out: list[dict] = []
         year = int(date_of_reporting[:4]) - 1
 
+        # Batch-load all emission factors for this (site, category)
+        # instead of querying per row (N+1 → 1 query).
+        # Load ALL years and prefer exact year match, fallback to latest.
+        ef_map: dict[str, tuple[float, str | None]] = {}
+        try:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT emission_category_name, factor_value, denominator_unit, year
+                    FROM emission_factors
+                    WHERE site_id = %s AND category_id = %s
+                    ORDER BY year DESC
+                    """,
+                    (site_id, category_id),
+                )
+                # Group by name, prefer exact year match, fallback to latest year
+                all_factors: dict[str, list[dict]] = {}
+                for row in cur.fetchall():
+                    name = (row["emission_category_name"] or "").strip().lower()
+                    if name:
+                        all_factors.setdefault(name, []).append(row)
+                for name, rows in all_factors.items():
+                    exact = [r for r in rows if r["year"] == year]
+                    best = exact[0] if exact else rows[0]  # rows already sorted DESC
+                    ef_map[name] = (float(best["factor_value"]), best.get("denominator_unit"))
+        except Exception as e:
+            logger.warning(f"Failed to preload emission factors for preview: {e}")
+
         for _, r in page_df.iterrows():
             activity_data = r.to_dict()
             activity_unit = str(activity_data.get("activity_data_unit") or "").strip() or None
             emission_category = str(activity_data.get("emission_category") or "").strip()
 
-            ef = None
+            factor_value = None
+            denominator_unit = None
+            total_emission = 0.0
+            global_category_name = None
+
             if emission_category:
-                ef = fetch_emission_factor(conn, site_id, category_id, year, emission_category)
-
-            factor_value = float(ef["factor_value"]) if ef and ef.get("factor_value") is not None else None
-            denominator_unit = ef.get("denominator_unit") if ef else None
-
-            total_emission = _calc_emission(
-                conn=conn,
-                site_id=site_id,
-                category_id=category_id,
-                activity_data=activity_data,
-                activity_unit=activity_unit,
-                date_of_reporting=date_of_reporting,
-            )
+                display_key = emission_category.strip().lower()
+                # Resolve display name → EF name via column_config mapping,
+                # fall back to direct name match if no mapping exists
+                resolved = category_resolver.get(display_key)
+                ef_key = resolved.strip().lower() if resolved else display_key
+                ef_entry = ef_map.get(ef_key)
+                if ef_entry:
+                    global_category_name = resolved if resolved else emission_category
+                    factor_value, denominator_unit = ef_entry
+                    activity_value = _extract_activity_value(activity_data)
+                    if activity_value > 0:
+                        if units_match_exact(denominator_unit, activity_unit):
+                            total_emission = round((activity_value * factor_value) / 1000.0, 2)
+                        else:
+                            conv = get_conversion_factor(activity_unit or "", denominator_unit or "")
+                            if conv:
+                                total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
 
             row_out = dict(activity_data)
+            row_out["global_category_name"] = global_category_name
             row_out["factor_value"] = factor_value
             row_out["denominator_unit"] = denominator_unit
             row_out["total_emission"] = total_emission
@@ -699,7 +818,7 @@ def get_preview_rows(
 
         return out, total
     finally:
-        conn.close()
+        release_connection(conn)
 
 def _extract_activity_value(activity_data: dict) -> float:
     """
@@ -829,6 +948,9 @@ def import_all_rows(
                 mapped_df["emission_category"].astype(str).str.strip().isin(selected)
             ]
 
+    # Resolve uploaded category names → EF names via column_config mapping
+    category_resolver = _build_category_resolver(site_id, category_id)
+
     conn = get_connection()
     inserted = 0
     skipped = 0
@@ -840,20 +962,27 @@ def import_all_rows(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT emission_category_name, factor_value, denominator_unit
+                SELECT emission_category_name, factor_value, denominator_unit, year
                 FROM emission_factors
                 WHERE site_id = %s
                   AND category_id = %s
-                  AND year = %s
+                ORDER BY year DESC
                 """,
-                (site_id, category_id, year),
+                (site_id, category_id),
             )
+            # Group by name, prefer exact year match, fallback to latest year
+            all_factors: dict[str, list[dict]] = {}
             for row in cur.fetchall():
                 name = (row["emission_category_name"] or "").strip().lower()
                 if not name:
                     continue
-                ef_map[name] = (float(row["factor_value"]), row.get("denominator_unit"))
-    except Exception:
+                all_factors.setdefault(name, []).append(row)
+            for name, rows in all_factors.items():
+                exact = [r for r in rows if r["year"] == year]
+                best = exact[0] if exact else rows[0]  # rows already sorted DESC
+                ef_map[name] = (float(best["factor_value"]), best.get("denominator_unit"))
+    except Exception as e:
+        logger.warning(f"Failed to preload emission factors for import: {e}")
         ef_map = {}
 
     try:
@@ -865,9 +994,11 @@ def import_all_rows(
             emission_category = str(activity_data.get("emission_category") or "").strip()
 
             if ef_map and emission_category:
-                key = emission_category.strip().lower()
-                if key in ef_map:
-                    factor_value, denom_unit = ef_map[key]
+                display_key = emission_category.strip().lower()
+                resolved = category_resolver.get(display_key)
+                ef_key = resolved.strip().lower() if resolved else display_key
+                if ef_key in ef_map:
+                    factor_value, denom_unit = ef_map[ef_key]
                     activity_value = _extract_activity_value(activity_data)
                     if activity_value <= 0:
                         total_emission = 0.0
@@ -878,8 +1009,7 @@ def import_all_rows(
                         if not conv:
                             total_emission = 0.0
                         else:
-                            converted = activity_value * float(conv)
-                            total_emission = round((converted * factor_value) / 1000.0, 2)
+                            total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
                 else:
                     total_emission = 0.0
             else:
@@ -911,4 +1041,4 @@ def import_all_rows(
         conn.rollback()
         raise
     finally:
-        conn.close()
+        release_connection(conn)

@@ -1,26 +1,22 @@
 
 import logging
+import uuid
+import os
+from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from app.core.cloudinary_service import upload_file
-from app.services.storage import save_temp_file_from_bytes
 from app.services.excel_parser import (
     get_unique_categories,
     get_preview_rows,
     import_all_rows,
 )
-from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document
+from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document, get_uploaded_document_by_id
+from app.core.config import settings
 
 import pandas as pd
 import io
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/excel", tags=["excel"])
-
-
-from fastapi import UploadFile, File, HTTPException
-import os
-import io
-import pandas as pd
 
 @router.post("/upload")
 async def upload_excel(file: UploadFile = File(...)):
@@ -34,9 +30,12 @@ async def upload_excel(file: UploadFile = File(...)):
     if ext not in allowed:
         raise HTTPException(status_code=400, detail="Only .xlsx, .xls, .csv files are allowed.")
 
-    temp_path = None
     try:
         contents = await file.read()
+
+        # enforce 100 MB limit
+        if len(contents) > 100 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File size exceeds 100 MB limit.")
 
         # parse headers — try row 0, 1, 2 (same as excel_parser)
         headers: list[str] = []
@@ -57,19 +56,18 @@ async def upload_excel(file: UploadFile = File(...)):
         if not headers:
             raise ValueError("The uploaded file appears to be empty or has no columns.")
 
-        # save temp file (needed for cloudinary uploader)
-        temp_path = await save_temp_file_from_bytes(contents, filename)
-
-        # upload to cloudinary
-        cloudinary_result = upload_file(temp_path, folder="excel-uploads")
-        cloud_url = cloudinary_result["secure_url"]
-        public_id = cloudinary_result.get("public_id")  # optional but useful
+        # save to temp for processing
+        file_id = str(uuid.uuid4())
+        local_filename = f"{file_id}.{ext}"
+        local_path = Path(settings.TEMP_DIR) / local_filename
+        with open(local_path, "wb") as f:
+            f.write(contents)
 
         doc = insert_uploaded_document(
             document_name=filename,
-            cloudinary_url=cloud_url,
-            cloudinary_public_id=public_id,
-            public_url=cloud_url,
+            cloudinary_url=str(local_path),
+            cloudinary_public_id=None,
+            public_url=str(local_path),
             file_type=file.content_type,
             file_size=len(contents),
         )
@@ -81,16 +79,10 @@ async def upload_excel(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"excel upload failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to process file.")
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception:
-                logger.warning(f"Failed to delete temp file: {temp_path}", exc_info=True)
 
 # ---- Step 2: unique categories BEFORE preview ----
 @router.post("/unique-categories")
-async def unique_categories(payload: dict):
+def unique_categories(payload: dict):
     try:
         document_id = int(payload.get("document_id"))
         mappings = payload.get("mappings") or {}
@@ -105,7 +97,7 @@ async def unique_categories(payload: dict):
 
 
 @router.post("/preview")
-async def preview(payload: dict):
+def preview(payload: dict):
     try:
         document_id = int(payload.get("document_id"))
         mappings = payload.get("mappings") or {}
@@ -137,7 +129,7 @@ async def preview(payload: dict):
 
 # ---- Step 4: import all + calculate + save ----
 @router.post("/import")
-async def bulk_import(payload: dict):
+def bulk_import(payload: dict):
     try:
         document_id = int(payload.get("document_id"))
         mappings = payload.get("mappings") or {}
@@ -155,6 +147,18 @@ async def bulk_import(payload: dict):
             date_of_reporting=date_of_reporting,
             chunk_size=2000,  # fast
         )
+
+        # cleanup temp file after import
+        try:
+            doc = get_uploaded_document_by_id(document_id)
+            if doc:
+                file_path = doc.get("cloudinary_url", "")
+                if file_path and os.path.isfile(file_path):
+                    os.remove(file_path)
+                    logger.info(f"Cleaned up temp file: {file_path}")
+        except Exception:
+            logger.warning(f"Failed to cleanup temp file for document {document_id}", exc_info=True)
+
         return res
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

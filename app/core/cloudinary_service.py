@@ -21,11 +21,12 @@ def upload_file(file_path: Path, folder: str = "invoices") -> dict:
     Returns dict with: public_id, secure_url, url, resource_type, bytes, format
     """
     try:
-        result = cloudinary.uploader.upload(
+        result = cloudinary.uploader.upload_large(
             str(file_path),
             folder=folder,
             resource_type="raw",
             type="upload",
+            chunk_size=6_000_000,
         )
         logger.info(f"Uploaded to Cloudinary: {result.get('public_id')}")
         return {
