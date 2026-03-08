@@ -212,6 +212,10 @@ Rules:
 - Do not guess. If a field is not found, return null.
 - Extract `subtotal`, `tax_amount`, and `total_amount` carefully.
 - Format dates as YYYY-MM-DD.
+- For `billing_month_end`: find the billing period or billing month (e.g., "Bill for the Month of April 2025", "Billing Period: March 2025").
+  Extract the LAST DAY of that billing month in YYYY-MM-DD format (e.g., "April 2025" → "2025-04-30", "February 2024" → "2024-02-29").
+  This is NOT the invoice issue date — it is the end of the consumption/service period.
+  If no billing month/period is mentioned, return null.
 - For `activities`: identify ALL distinct purchased items or resources in each invoice.
   Each line item that has its own quantity and unit should be a separate activity entry.
   Include consumables (fuel, gas, chemicals), equipment (cylinders, containers), materials,
@@ -232,6 +236,7 @@ Return a JSON object with key "invoices" containing an array. Each element is on
     {{
         "invoice_number": "string or null",
         "invoice_date": "YYYY-MM-DD or null",
+        "billing_month_end": "YYYY-MM-DD or null (last day of the billing month/period)",
         "vendor_name": "string or null",
         "vendor_address": "string or null",
         "subtotal": "float or null",

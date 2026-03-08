@@ -201,7 +201,7 @@ async def process_document(
                     site_id=site_id,
                     category_id=category_id,
                     activity_data={"Activity Data": "", "emission_category": ""},
-                    date_of_reporting=inv.invoice_date if inv else None,
+                    date_of_reporting=(inv.billing_month_end or inv.invoice_date) if inv else None,
                     vendor_name=inv.vendor_name if inv else None,
                 ))
                 continue
@@ -300,6 +300,9 @@ async def process_document(
                             f"emission_category '{mapped_emission_category}'"
                         )
 
+                # Prefer billing_month_end (last day of billing period) over invoice_date
+                reporting_date = inv.billing_month_end or inv.invoice_date
+
                 all_emission_ready.append(EmissionReady(
                     invoice_index=inv_idx,
                     activity_index=act_idx,
@@ -307,7 +310,7 @@ async def process_document(
                     category_id=final_category_id,
                     activity_data=activity_data,
                     activity_data_unit=activity.unit_of_measurement,
-                    date_of_reporting=inv.invoice_date,
+                    date_of_reporting=reporting_date,
                     total_emission=0.0,
                     unit="kg CO2e",
                     vendor_name=inv.vendor_name,
