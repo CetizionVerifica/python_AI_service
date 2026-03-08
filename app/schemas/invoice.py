@@ -38,6 +38,7 @@ class ActivityEntry(BaseModel):
 class InvoiceData(BaseModel):
     invoice_number: Optional[str] = Field(None, description="Unique identifier for the invoice")
     invoice_date: Optional[str] = Field(None, description="Date of the invoice (YYYY-MM-DD)")
+    billing_month_end: Optional[str] = Field(None, description="Last day of the billing month/period (YYYY-MM-DD)")
     vendor_name: Optional[str] = Field(None, description="Name of the vendor or supplier")
     vendor_address: Optional[str] = Field(None, description="Address of the vendor")
     subtotal: Optional[float] = Field(None, description="Subtotal amount before tax")

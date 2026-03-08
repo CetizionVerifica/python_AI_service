@@ -556,6 +556,7 @@ requires-dist = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "openai" },
+    { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pillow" },
