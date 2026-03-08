@@ -39,23 +39,60 @@ _UNIT_STRIP_PATTERNS = [
 ]
 
 
+_UNIT_ALIASES: dict[str, str] = {
+    "tonnes": "tonne",
+    "tons": "ton",
+    "litres": "litre",
+    "liters": "litre",
+    "liter": "litre",
+    "gallons": "gallon",
+    "kilo litre": "kl",
+    "kilolitre": "kl",
+    "kiloliter": "kl",
+    "cubic metre": "cubic meter",
+    "m3": "cubic meter",
+    "m³": "cubic meter",
+    "kilogram": "kg",
+    "kilograms": "kg",
+    "kgs": "kg",
+    "gram": "g",
+    "grams": "g",
+    "pound": "lb",
+    "pounds": "lb",
+    "lbs": "lb",
+    "meter": "m",
+    "meters": "m",
+    "metre": "m",
+    "metres": "m",
+    "kilometer": "km",
+    "kilometers": "km",
+    "kilometre": "km",
+    "kilometres": "km",
+    "miles": "mile",
+    "mi": "mile",
+}
+
+
 def _normalise_unit(raw: str) -> str:
     """
     Clean a denominator unit extracted from an emission factor sheet.
 
     Examples:
         "ton of material"   → "ton"
-        "tonnes of waste"   → "tonnes"
+        "Tonnes"            → "tonne"
         "per passenger.km"  → "passenger.km"
-        "USD"               → "USD"
-        "kWh"               → "kWh"
+        "KWH"              → "kwh"
+        "Litre"            → "litre"
     """
     text = raw.strip()
+    # Strip parentheses (UOM cells often have wrapping parens like "(kg CO2 e/ km)")
+    text = text.replace("(", "").replace(")", "").strip()
     for pat in _UNIT_STRIP_PATTERNS:
         m = pat.match(text)
         if m:
             text = m.group(1).strip()
-    return text
+    lower = text.lower()
+    return _UNIT_ALIASES.get(lower, lower)
 
 
 # ---------------------------------------------------------------------------
@@ -935,6 +972,9 @@ def import_all_rows(
     date_of_reporting: str,
     chunk_size: int = 2000,
 ) -> dict:
+    import uuid
+    upload_batch_id = str(uuid.uuid4())
+
     content, ext = download_document_bytes(document_id)
     df = _read_df_from_bytes(content, ext)
     mapped_df = map_df(df, mappings)
@@ -985,8 +1025,40 @@ def import_all_rows(
         logger.warning(f"Failed to preload emission factors for import: {e}")
         ef_map = {}
 
+    # FERA (Fuel and Energy Related Activities) - preload FERA emission factors
+    FERA_CATEGORY_ID = 28
+    FERA_TRIGGER_CATEGORIES = {1, 2, 4}  # Stationary Combustion, Mobile Combustion, Purchased Electricity
+    fera_ef_map: dict[str, tuple[float, str | None]] = {}
+    if category_id in FERA_TRIGGER_CATEGORIES:
+        try:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT emission_category_name, factor_value, denominator_unit, year
+                    FROM emission_factors
+                    WHERE site_id = %s
+                      AND category_id = %s
+                    ORDER BY year DESC
+                    """,
+                    (site_id, FERA_CATEGORY_ID),
+                )
+                fera_all_factors: dict[str, list[dict]] = {}
+                for row in cur.fetchall():
+                    name = (row["emission_category_name"] or "").strip().lower()
+                    if not name:
+                        continue
+                    fera_all_factors.setdefault(name, []).append(row)
+                for name, rows in fera_all_factors.items():
+                    exact = [r for r in rows if r["year"] == year]
+                    best = exact[0] if exact else rows[0]
+                    fera_ef_map[name] = (float(best["factor_value"]), best.get("denominator_unit"))
+        except Exception as e:
+            logger.warning(f"Failed to preload FERA emission factors: {e}")
+
     try:
         rows_buffer: list[dict] = []
+        fera_rows_buffer: list[dict] = []
 
         for _, row in mapped_df.iterrows():
             activity_data = row.to_dict()
@@ -1024,18 +1096,55 @@ def import_all_rows(
                     "unit": "tCO2e",
                     "date_of_reporting": date_of_reporting,
                     "activity_data_unit": activity_unit,
+                    "upload_batch_id": upload_batch_id,
                 }
             )
+
+            # Auto-create FERA emission row if applicable
+            if fera_ef_map and emission_category:
+                fera_key = emission_category.strip().lower()
+                resolved_fera = category_resolver.get(fera_key)
+                fera_lookup = resolved_fera.strip().lower() if resolved_fera else fera_key
+                if fera_lookup in fera_ef_map:
+                    fera_factor_value, fera_denom_unit = fera_ef_map[fera_lookup]
+                    fera_activity_value = _extract_activity_value(activity_data)
+                    if fera_activity_value > 0:
+                        if units_match_exact(fera_denom_unit, activity_unit):
+                            fera_emission = round((fera_activity_value * fera_factor_value) / 1000.0, 2)
+                        else:
+                            fera_conv = get_conversion_factor(activity_unit or "", fera_denom_unit or "")
+                            fera_emission = round((fera_activity_value * float(fera_conv) * fera_factor_value) / 1000.0, 2) if fera_conv else 0.0
+                        if fera_emission > 0:
+                            fera_activity = dict(activity_data)
+                            fera_activity["_source_category_id"] = category_id
+                            fera_activity["_auto_fera"] = True
+                            fera_rows_buffer.append(
+                                {
+                                    "site_id": site_id,
+                                    "category_id": FERA_CATEGORY_ID,
+                                    "activity_data": fera_activity,
+                                    "total_emission": fera_emission,
+                                    "unit": "tCO2e",
+                                    "date_of_reporting": date_of_reporting,
+                                    "activity_data_unit": activity_unit,
+                                    "upload_batch_id": upload_batch_id,
+                                }
+                            )
 
             if len(rows_buffer) >= chunk_size:
                 inserted += bulk_insert_emissions_with_conn(conn, rows_buffer)
                 rows_buffer = []
+            if len(fera_rows_buffer) >= chunk_size:
+                inserted += bulk_insert_emissions_with_conn(conn, fera_rows_buffer)
+                fera_rows_buffer = []
 
         if rows_buffer:
             inserted += bulk_insert_emissions_with_conn(conn, rows_buffer)
+        if fera_rows_buffer:
+            inserted += bulk_insert_emissions_with_conn(conn, fera_rows_buffer)
 
         conn.commit()
-        return {"inserted": inserted, "skipped": skipped, "total_rows": total_rows}
+        return {"inserted": inserted, "skipped": skipped, "total_rows": total_rows, "upload_batch_id": upload_batch_id if inserted > 0 else None}
 
     except Exception:
         conn.rollback()

@@ -643,6 +643,7 @@ def bulk_insert_emissions(rows: list[dict], page_size: int = 2000) -> int:
                 r["date_of_reporting"],
                 r.get("activity_data_unit"),
                 r.get("created_by"),
+                r.get("upload_batch_id"),
             )
         )
 
@@ -654,7 +655,7 @@ def bulk_insert_emissions(rows: list[dict], page_size: int = 2000) -> int:
                 f"""
                 INSERT INTO {EMISSION_TABLE}
                   (site_id, category_id, activity_data, total_emission, unit,
-                   date_of_reporting, activity_data_unit, created_by)
+                   date_of_reporting, activity_data_unit, created_by, upload_batch_id)
                 VALUES %s
                 """,
                 values,
@@ -731,11 +732,12 @@ def bulk_insert_emissions_with_conn(conn, rows: list[dict]) -> int:
             (
                 r["site_id"],
                 r["category_id"],
-                Json(activity_data) if isinstance(activity_data, dict) else activity_data,  # ✅ FIX
+                Json(activity_data) if isinstance(activity_data, dict) else activity_data,
                 r["total_emission"],
                 r.get("unit") or "tCO2e",
                 r["date_of_reporting"],
                 r.get("activity_data_unit"),
+                r.get("upload_batch_id"),
             )
         )
 
@@ -745,7 +747,7 @@ def bulk_insert_emissions_with_conn(conn, rows: list[dict]) -> int:
             f"""
             INSERT INTO {EMISSION_TABLE}
               (site_id, category_id, activity_data, total_emission, unit,
-               date_of_reporting, activity_data_unit)
+               date_of_reporting, activity_data_unit, upload_batch_id)
             VALUES %s
             """,
             values,
