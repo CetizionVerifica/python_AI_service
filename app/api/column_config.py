@@ -184,10 +184,17 @@ Context:
 - Emission category names were split by " - " into dimensions. Each dimension represents a dropdown column in the data entry form.
 - There are already existing columns in the system: {json.dumps(body.existing_columns)}
 
+ESG Column Naming Conventions (IMPORTANT — follow these strictly for transport/travel categories):
+- "Travel Mode" means ONLY broad transport modes: Road, Air, Sea, Rail. Use this name ONLY when the dimension values are exactly these broad categories.
+- "Vehicle Type" means specific transport/vehicle types: Car, Van, Bus, Train, Flight, Domestic flight, International flight, Motorbike, Motor bike, Taxi, Taxis, Ship, HGV, Cargo ship, etc. If values are specific vehicles or transport types, ALWAYS use "Vehicle Type" — NEVER "Travel Mode".
+- "Fuel Type/Class" means fuel types (Petrol, Diesel, CNG, LPG, Electric, Hybrid, Unknown) OR travel/service classes (Economy class, Business class, First class, Premium economy class) OR vehicle sub-types (Average bike, Average bus, National train, Regular taxi, All rigids).
+- For 2-dimension transport categories: dimension 0 is "Vehicle Type", dimension 1 is "Fuel Type/Class".
+- For 3-dimension transport categories: dimension 0 is "Travel Mode" (Road/Air/Sea/Rail), dimension 1 is "Vehicle Type", dimension 2 is "Fuel Type/Class".
+
 Rules:
 1. For each dimension, suggest a clear, concise column name (2-4 words max).
 2. If an existing column name matches well, set "reuse_existing" to that exact name.
-3. For the activity/numeric column, suggest a name based on the unit (e.g., "Weight" for tonnes/kg, "Volume" for litres, "Spent Value" for USD/INR, "Distance" for km, "Energy Consumed" for kWh/MWh).
+3. For the activity/numeric column, suggest a name based on the unit (e.g., "Weight" for tonnes/kg, "Volume" for litres, "Spent Value" for USD/INR, "Distance" for km/miles/passenger.km, "Energy Consumed" for kWh/MWh).
 4. If the unit suggests the data can also be entered in related units, list them in "suggested_units" (e.g., for "ton" suggest ["ton", "kg", "tonnes"]).
 
 Return a JSON object with this exact structure:
@@ -217,11 +224,18 @@ Context:
 - Each dimension group needs its own set of column names.
 - There are already existing columns in the system: {json.dumps(body.existing_columns)}
 
+ESG Column Naming Conventions (IMPORTANT — follow these strictly for transport/travel categories):
+- "Travel Mode" means ONLY broad transport modes: Road, Air, Sea, Rail. Use this name ONLY when the dimension values are exactly these broad categories.
+- "Vehicle Type" means specific transport/vehicle types: Car, Van, Bus, Train, Flight, Domestic flight, International flight, Motorbike, Motor bike, Taxi, Taxis, Ship, HGV, Cargo ship, etc. If values are specific vehicles or transport types, ALWAYS use "Vehicle Type" — NEVER "Travel Mode".
+- "Fuel Type/Class" means fuel types (Petrol, Diesel, CNG, LPG, Electric, Hybrid, Unknown) OR travel/service classes (Economy class, Business class, First class, Premium economy class) OR vehicle sub-types (Average bike, Average bus, National train, Regular taxi, All rigids).
+- For 2-dimension transport categories: dimension 0 is "Vehicle Type", dimension 1 is "Fuel Type/Class".
+- For 3-dimension transport categories: dimension 0 is "Travel Mode" (Road/Air/Sea/Rail), dimension 1 is "Vehicle Type", dimension 2 is "Fuel Type/Class".
+
 Rules:
 1. For each dimension in each group, suggest a clear, concise column name (2-4 words max).
 2. If an existing column name matches well, set "reuse_existing" to that exact name.
 3. Column names should be CONSISTENT across groups where the same concept appears (e.g., if both 2-dim and 3-dim groups have a "disposal method" dimension, use the same name).
-4. For the activity/numeric column, suggest a name based on the unit (e.g., "Weight" for tonnes/kg, "Volume" for litres, "Distance" for km).
+4. For the activity/numeric column, suggest a name based on the unit (e.g., "Weight" for tonnes/kg, "Volume" for litres, "Distance" for km/miles/passenger.km).
 5. If the unit suggests the data can also be entered in related units, list them in "suggested_units".
 
 Return a JSON object with this exact structure:
