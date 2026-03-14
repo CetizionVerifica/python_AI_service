@@ -691,6 +691,13 @@ def download_document_bytes(document_id: int) -> tuple[bytes, str]:
         _cache_set(document_id, content, ext)
         return content, ext
 
+    # If the path looks like a local filesystem path (no URL scheme),
+    # the temp file was deleted — don't attempt requests.get() on it.
+    if not file_path.startswith(("http://", "https://")):
+        raise ValueError(
+            f"Temp file no longer exists at '{file_path}'. Please re-upload the file."
+        )
+
     # fallback: legacy Cloudinary URL
     try:
         r = requests.get(file_path, timeout=60)
@@ -711,29 +718,61 @@ def _build_category_resolver(site_id: int, category_id: int) -> dict[str, str]:
     Build a case-insensitive lookup from display category names (as they appear
     in uploaded files) to emission_category_name (as stored in emission_factors).
 
-    Uses column_config's emission_category_mapping JSONB:
-      Keys  = pipe-separated display names, e.g. "Project Chemicals" or "Paper|Recycled"
-      Values = actual emission_category_name for EF lookup, e.g. "Paper - Recycled"
+    Resolution order:
+      1. column_config.emission_category_mapping JSONB (pipe-separated keys)
+      2. Fallback: emission_category_mapping table (ECM) which stores
+         company_category_name → global_category_name per company/site/category.
 
-    Returns empty dict if no column_config or no mapping exists.
+    Returns empty dict if no mapping source has data.
     """
+    resolver: dict[str, str] = {}
+
+    # 1. Try column_config's emission_category_mapping JSONB
     try:
         config = fetch_column_config(site_id, category_id)
-        if not config:
-            return {}
-
-        ecm = config.get("emission_category_mapping") or {}
-        if not ecm:
-            return {}
-
-        resolver: dict[str, str] = {}
-        for display_key, ef_name in ecm.items():
-            if display_key and ef_name:
-                resolver[str(display_key).strip().lower()] = str(ef_name).strip()
-        return resolver
+        if config:
+            ecm = config.get("emission_category_mapping") or {}
+            for display_key, ef_name in ecm.items():
+                if display_key and ef_name:
+                    resolver[str(display_key).strip().lower()] = str(ef_name).strip()
     except Exception as e:
         logger.warning(f"Failed to load column_config for category resolver: {e}")
-        return {}
+
+    if resolver:
+        return resolver
+
+    # 2. Fallback: query emission_category_mapping table (ECM)
+    conn = get_connection()
+    try:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT company_category_name, global_category_name
+                FROM emission_category_mapping
+                WHERE category_id = %s
+                  AND (site_id = %s OR site_id IS NULL)
+                ORDER BY site_id DESC NULLS LAST
+                """,
+                (category_id, site_id),
+            )
+            for row in cur.fetchall():
+                key = (row["company_category_name"] or "").strip().lower()
+                val = (row["global_category_name"] or "").strip()
+                if key and val and key not in resolver:
+                    resolver[key] = val
+        if resolver:
+            logger.info(
+                f"Category resolver built from ECM table: "
+                f"site_id={site_id}, category_id={category_id}, "
+                f"{len(resolver)} mappings"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to load ECM fallback for category resolver: {e}")
+    finally:
+        release_connection(conn)
+
+    return resolver
 
 
 # ---------- Step 2: unique categories ----------
@@ -815,6 +854,12 @@ def get_preview_rows(
         except Exception as e:
             logger.warning(f"Failed to preload emission factors for preview: {e}")
 
+        logger.info(
+            f"Preview EF lookup: site_id={site_id}, category_id={category_id}, "
+            f"year={year}, ef_map_keys={list(ef_map.keys())}, "
+            f"category_resolver_keys={list(category_resolver.keys())}"
+        )
+
         for _, r in page_df.iterrows():
             activity_data = r.to_dict()
             activity_unit = str(activity_data.get("activity_data_unit") or "").strip() or None
@@ -832,6 +877,12 @@ def get_preview_rows(
                 resolved = category_resolver.get(display_key)
                 ef_key = resolved.strip().lower() if resolved else display_key
                 ef_entry = ef_map.get(ef_key)
+                if not ef_entry:
+                    logger.warning(
+                        f"No emission factor found for category '{emission_category}' "
+                        f"(ef_key='{ef_key}', resolved='{resolved}'). "
+                        f"Available keys: {list(ef_map.keys())}"
+                    )
                 if ef_entry:
                     global_category_name = resolved if resolved else emission_category
                     factor_value, denominator_unit = ef_entry
@@ -843,6 +894,11 @@ def get_preview_rows(
                             conv = get_conversion_factor(activity_unit or "", denominator_unit or "")
                             if conv:
                                 total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
+                            else:
+                                logger.warning(
+                                    f"No unit conversion for '{activity_unit}' → '{denominator_unit}' "
+                                    f"(category='{emission_category}')"
+                                )
 
             row_out = dict(activity_data)
             row_out["global_category_name"] = global_category_name
