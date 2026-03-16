@@ -745,6 +745,7 @@ def bulk_insert_emissions_with_conn(conn, rows: list[dict]) -> int:
                 r.get("unit") or "tCO2e",
                 r["date_of_reporting"],
                 r.get("activity_data_unit"),
+                r.get("created_by"),
                 r.get("upload_batch_id"),
                 Json(ef_snapshot) if isinstance(ef_snapshot, dict) else None,
             )
@@ -756,7 +757,8 @@ def bulk_insert_emissions_with_conn(conn, rows: list[dict]) -> int:
             f"""
             INSERT INTO {EMISSION_TABLE}
               (site_id, category_id, activity_data, extra_data, total_emission, unit,
-               date_of_reporting, activity_data_unit, upload_batch_id, emission_factor_snapshot)
+               date_of_reporting, activity_data_unit, created_by, upload_batch_id,
+               emission_factor_snapshot)
             VALUES %s
             """,
             values,

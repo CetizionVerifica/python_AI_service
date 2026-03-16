@@ -1027,6 +1027,7 @@ def import_all_rows(
     category_id: int,
     date_of_reporting: str,
     chunk_size: int = 2000,
+    user_id: int = None,
 ) -> dict:
     import uuid
     upload_batch_id = str(uuid.uuid4())
@@ -1182,6 +1183,7 @@ def import_all_rows(
                     "activity_data_unit": activity_unit,
                     "upload_batch_id": upload_batch_id,
                     "emission_factor_snapshot": ef_snapshot,
+                    "created_by": user_id,
                 }
             )
 
@@ -1226,6 +1228,7 @@ def import_all_rows(
                                     "activity_data_unit": activity_unit,
                                     "upload_batch_id": upload_batch_id,
                                     "emission_factor_snapshot": fera_ef_snapshot,
+                                    "created_by": user_id,
                                 }
                             )
 
