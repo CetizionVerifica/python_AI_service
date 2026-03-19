@@ -691,6 +691,13 @@ def download_document_bytes(document_id: int) -> tuple[bytes, str]:
         _cache_set(document_id, content, ext)
         return content, ext
 
+    # If the path looks like a local filesystem path (no URL scheme),
+    # the temp file was deleted — don't attempt requests.get() on it.
+    if not file_path.startswith(("http://", "https://")):
+        raise ValueError(
+            f"Temp file no longer exists at '{file_path}'. Please re-upload the file."
+        )
+
     # fallback: legacy Cloudinary URL
     try:
         r = requests.get(file_path, timeout=60)
@@ -711,29 +718,61 @@ def _build_category_resolver(site_id: int, category_id: int) -> dict[str, str]:
     Build a case-insensitive lookup from display category names (as they appear
     in uploaded files) to emission_category_name (as stored in emission_factors).
 
-    Uses column_config's emission_category_mapping JSONB:
-      Keys  = pipe-separated display names, e.g. "Project Chemicals" or "Paper|Recycled"
-      Values = actual emission_category_name for EF lookup, e.g. "Paper - Recycled"
+    Resolution order:
+      1. column_config.emission_category_mapping JSONB (pipe-separated keys)
+      2. Fallback: emission_category_mapping table (ECM) which stores
+         company_category_name → global_category_name per company/site/category.
 
-    Returns empty dict if no column_config or no mapping exists.
+    Returns empty dict if no mapping source has data.
     """
+    resolver: dict[str, str] = {}
+
+    # 1. Try column_config's emission_category_mapping JSONB
     try:
         config = fetch_column_config(site_id, category_id)
-        if not config:
-            return {}
-
-        ecm = config.get("emission_category_mapping") or {}
-        if not ecm:
-            return {}
-
-        resolver: dict[str, str] = {}
-        for display_key, ef_name in ecm.items():
-            if display_key and ef_name:
-                resolver[str(display_key).strip().lower()] = str(ef_name).strip()
-        return resolver
+        if config:
+            ecm = config.get("emission_category_mapping") or {}
+            for display_key, ef_name in ecm.items():
+                if display_key and ef_name:
+                    resolver[str(display_key).strip().lower()] = str(ef_name).strip()
     except Exception as e:
         logger.warning(f"Failed to load column_config for category resolver: {e}")
-        return {}
+
+    if resolver:
+        return resolver
+
+    # 2. Fallback: query emission_category_mapping table (ECM)
+    conn = get_connection()
+    try:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT company_category_name, global_category_name
+                FROM emission_category_mapping
+                WHERE category_id = %s
+                  AND (site_id = %s OR site_id IS NULL)
+                ORDER BY site_id DESC NULLS LAST
+                """,
+                (category_id, site_id),
+            )
+            for row in cur.fetchall():
+                key = (row["company_category_name"] or "").strip().lower()
+                val = (row["global_category_name"] or "").strip()
+                if key and val and key not in resolver:
+                    resolver[key] = val
+        if resolver:
+            logger.info(
+                f"Category resolver built from ECM table: "
+                f"site_id={site_id}, category_id={category_id}, "
+                f"{len(resolver)} mappings"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to load ECM fallback for category resolver: {e}")
+    finally:
+        release_connection(conn)
+
+    return resolver
 
 
 # ---------- Step 2: unique categories ----------
@@ -815,6 +854,12 @@ def get_preview_rows(
         except Exception as e:
             logger.warning(f"Failed to preload emission factors for preview: {e}")
 
+        logger.info(
+            f"Preview EF lookup: site_id={site_id}, category_id={category_id}, "
+            f"year={year}, ef_map_keys={list(ef_map.keys())}, "
+            f"category_resolver_keys={list(category_resolver.keys())}"
+        )
+
         for _, r in page_df.iterrows():
             activity_data = r.to_dict()
             activity_unit = str(activity_data.get("activity_data_unit") or "").strip() or None
@@ -832,6 +877,12 @@ def get_preview_rows(
                 resolved = category_resolver.get(display_key)
                 ef_key = resolved.strip().lower() if resolved else display_key
                 ef_entry = ef_map.get(ef_key)
+                if not ef_entry:
+                    logger.warning(
+                        f"No emission factor found for category '{emission_category}' "
+                        f"(ef_key='{ef_key}', resolved='{resolved}'). "
+                        f"Available keys: {list(ef_map.keys())}"
+                    )
                 if ef_entry:
                     global_category_name = resolved if resolved else emission_category
                     factor_value, denominator_unit = ef_entry
@@ -843,6 +894,11 @@ def get_preview_rows(
                             conv = get_conversion_factor(activity_unit or "", denominator_unit or "")
                             if conv:
                                 total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
+                            else:
+                                logger.warning(
+                                    f"No unit conversion for '{activity_unit}' → '{denominator_unit}' "
+                                    f"(category='{emission_category}')"
+                                )
 
             row_out = dict(activity_data)
             row_out["global_category_name"] = global_category_name
@@ -971,6 +1027,7 @@ def import_all_rows(
     category_id: int,
     date_of_reporting: str,
     chunk_size: int = 2000,
+    user_id: int = None,
 ) -> dict:
     import uuid
     upload_batch_id = str(uuid.uuid4())
@@ -996,13 +1053,14 @@ def import_all_rows(
     skipped = 0
 
     year = int(date_of_reporting[:4]) - 1
-    ef_map: dict[str, tuple[float, str | None]] = {}
+    ef_map: dict[str, dict] = {}
     try:
         from psycopg2.extras import RealDictCursor
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT emission_category_name, factor_value, denominator_unit, year
+                SELECT emission_factor_id, emission_category_name, global_category_name,
+                       factor_value, denominator_unit, source, year
                 FROM emission_factors
                 WHERE site_id = %s
                   AND category_id = %s
@@ -1020,7 +1078,7 @@ def import_all_rows(
             for name, rows in all_factors.items():
                 exact = [r for r in rows if r["year"] == year]
                 best = exact[0] if exact else rows[0]  # rows already sorted DESC
-                ef_map[name] = (float(best["factor_value"]), best.get("denominator_unit"))
+                ef_map[name] = best
     except Exception as e:
         logger.warning(f"Failed to preload emission factors for import: {e}")
         ef_map = {}
@@ -1028,14 +1086,15 @@ def import_all_rows(
     # FERA (Fuel and Energy Related Activities) - preload FERA emission factors
     FERA_CATEGORY_ID = 28
     FERA_TRIGGER_CATEGORIES = {1, 2, 4}  # Stationary Combustion, Mobile Combustion, Purchased Electricity
-    fera_ef_map: dict[str, tuple[float, str | None]] = {}
+    fera_ef_map: dict[str, dict] = {}
     if category_id in FERA_TRIGGER_CATEGORIES:
         try:
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT emission_category_name, factor_value, denominator_unit, year
+                    SELECT emission_factor_id, emission_category_name, global_category_name,
+                           factor_value, denominator_unit, source, year
                     FROM emission_factors
                     WHERE site_id = %s
                       AND category_id = %s
@@ -1052,7 +1111,7 @@ def import_all_rows(
                 for name, rows in fera_all_factors.items():
                     exact = [r for r in rows if r["year"] == year]
                     best = exact[0] if exact else rows[0]
-                    fera_ef_map[name] = (float(best["factor_value"]), best.get("denominator_unit"))
+                    fera_ef_map[name] = best
         except Exception as e:
             logger.warning(f"Failed to preload FERA emission factors: {e}")
 
@@ -1062,15 +1121,28 @@ def import_all_rows(
 
         for _, row in mapped_df.iterrows():
             activity_data = row.to_dict()
+
+            # Separate extra_ prefixed fields into extra_data
+            extra_data: dict = {}
+            for k in list(activity_data.keys()):
+                if k.startswith("extra_"):
+                    val = activity_data.pop(k)
+                    real_key = k[len("extra_"):]
+                    if val is not None and str(val).strip():
+                        extra_data[real_key] = str(val).strip()
+
             activity_unit = str(activity_data.get("activity_data_unit") or "").strip() or None
             emission_category = str(activity_data.get("emission_category") or "").strip()
 
+            matched_ef: dict | None = None
             if ef_map and emission_category:
                 display_key = emission_category.strip().lower()
                 resolved = category_resolver.get(display_key)
                 ef_key = resolved.strip().lower() if resolved else display_key
                 if ef_key in ef_map:
-                    factor_value, denom_unit = ef_map[ef_key]
+                    matched_ef = ef_map[ef_key]
+                    factor_value = float(matched_ef.get("factor_value") or 0)
+                    denom_unit = matched_ef.get("denominator_unit")
                     activity_value = _extract_activity_value(activity_data)
                     if activity_value <= 0:
                         total_emission = 0.0
@@ -1087,16 +1159,31 @@ def import_all_rows(
             else:
                 total_emission = _calc_emission(conn, site_id, category_id, activity_data, activity_unit, date_of_reporting)
 
+            ef_snapshot = None
+            if matched_ef:
+                ef_snapshot = {
+                    "emission_factor_id": matched_ef.get("emission_factor_id"),
+                    "emission_category_name": matched_ef.get("emission_category_name"),
+                    "global_category_name": matched_ef.get("global_category_name"),
+                    "factor_value": float(matched_ef.get("factor_value") or 0),
+                    "denominator_unit": matched_ef.get("denominator_unit"),
+                    "source": matched_ef.get("source"),
+                    "year": matched_ef.get("year"),
+                }
+
             rows_buffer.append(
                 {
                     "site_id": site_id,
                     "category_id": category_id,
                     "activity_data": activity_data,
+                    "extra_data": extra_data,
                     "total_emission": total_emission,
                     "unit": "tCO2e",
                     "date_of_reporting": date_of_reporting,
                     "activity_data_unit": activity_unit,
                     "upload_batch_id": upload_batch_id,
+                    "emission_factor_snapshot": ef_snapshot,
+                    "created_by": user_id,
                 }
             )
 
@@ -1106,7 +1193,9 @@ def import_all_rows(
                 resolved_fera = category_resolver.get(fera_key)
                 fera_lookup = resolved_fera.strip().lower() if resolved_fera else fera_key
                 if fera_lookup in fera_ef_map:
-                    fera_factor_value, fera_denom_unit = fera_ef_map[fera_lookup]
+                    fera_matched = fera_ef_map[fera_lookup]
+                    fera_factor_value = float(fera_matched.get("factor_value") or 0)
+                    fera_denom_unit = fera_matched.get("denominator_unit")
                     fera_activity_value = _extract_activity_value(activity_data)
                     if fera_activity_value > 0:
                         if units_match_exact(fera_denom_unit, activity_unit):
@@ -1118,16 +1207,28 @@ def import_all_rows(
                             fera_activity = dict(activity_data)
                             fera_activity["_source_category_id"] = category_id
                             fera_activity["_auto_fera"] = True
+                            fera_ef_snapshot = {
+                                "emission_factor_id": fera_matched.get("emission_factor_id"),
+                                "emission_category_name": fera_matched.get("emission_category_name"),
+                                "global_category_name": fera_matched.get("global_category_name"),
+                                "factor_value": fera_factor_value,
+                                "denominator_unit": fera_denom_unit,
+                                "source": fera_matched.get("source"),
+                                "year": fera_matched.get("year"),
+                            }
                             fera_rows_buffer.append(
                                 {
                                     "site_id": site_id,
                                     "category_id": FERA_CATEGORY_ID,
                                     "activity_data": fera_activity,
+                                    "extra_data": extra_data,
                                     "total_emission": fera_emission,
                                     "unit": "tCO2e",
                                     "date_of_reporting": date_of_reporting,
                                     "activity_data_unit": activity_unit,
                                     "upload_batch_id": upload_batch_id,
+                                    "emission_factor_snapshot": fera_ef_snapshot,
+                                    "created_by": user_id,
                                 }
                             )
 
