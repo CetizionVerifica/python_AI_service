@@ -137,6 +137,9 @@ def bulk_import(payload: dict):
         site_id = int(payload.get("site_id"))
         category_id = int(payload.get("category_id"))
         date_of_reporting = str(payload.get("date_of_reporting"))
+        user_id = payload.get("user_id")
+        if user_id is not None:
+            user_id = int(user_id)
 
         res = import_all_rows(
             document_id=document_id,
@@ -146,6 +149,7 @@ def bulk_import(payload: dict):
             category_id=category_id,
             date_of_reporting=date_of_reporting,
             chunk_size=2000,  # fast
+            user_id=user_id,
         )
 
         # cleanup temp file after import

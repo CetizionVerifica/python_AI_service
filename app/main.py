@@ -9,6 +9,7 @@ from app.api.column_config import router as column_config_router
 from app.core.logging import setup_logging
 from app.api.excel import router as excel_router
 from app.core.database import ensure_emission_factor_uploads_table, ensure_uploaded_documents_table
+from app.api.sea_route import router as sea_route_router
 
 # Setup Logging
 setup_logging()
@@ -44,6 +45,7 @@ app.include_router(emission_factors_router, prefix="/v1")
 app.include_router(category_mapping_router, prefix="/v1")
 app.include_router(column_config_router, prefix="/v1")
 app.include_router(excel_router, prefix="/v1")
+app.include_router(sea_route_router, prefix="/v1")
 
 @app.get("/health")
 def health_check():
