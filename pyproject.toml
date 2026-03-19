@@ -22,7 +22,9 @@ dependencies = [
     "python-multipart",
     "rapidfuzz",
     "requests>=2.32.5",
+    "searoute",
     "tenacity",
     "uvicorn",
     "openpyxl>=3.1.0",
+    
 ]
