@@ -14,15 +14,15 @@ EMISSION_TABLE = "emission"  # change if your table name differs
 # ---------------------------------------------------------------------------
 # Connection pool (reuses TCP connections instead of creating new ones)
 # ---------------------------------------------------------------------------
-_pool: _pg_pool.SimpleConnectionPool | None = None
+_pool: _pg_pool.ThreadedConnectionPool | None = None
 
 
-def _get_pool() -> _pg_pool.SimpleConnectionPool:
+def _get_pool() -> _pg_pool.ThreadedConnectionPool:
     global _pool
     if _pool is None or _pool.closed:
-        _pool = _pg_pool.SimpleConnectionPool(
+        _pool = _pg_pool.ThreadedConnectionPool(
             minconn=2,
-            maxconn=10,
+            maxconn=20,
             host=settings.DB_HOST,
             port=settings.DB_PORT,
             user=settings.DB_USERNAME,

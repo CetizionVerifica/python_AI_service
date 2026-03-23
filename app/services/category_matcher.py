@@ -2,7 +2,7 @@
 import logging
 from dataclasses import dataclass
 from rapidfuzz import fuzz, process
-from app.core.database import get_connection
+from app.core.database import get_connection, release_connection
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def fetch_emission_categories() -> list[dict]:
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def fetch_emission_categories_by_site_and_category(site_id: int, category_id: int) -> list[dict]:
@@ -63,7 +63,7 @@ def fetch_emission_categories_by_site_and_category(site_id: int, category_id: in
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def match_category(

@@ -174,7 +174,7 @@ async def update_upload_results(upload_id: int, body: UpdateUploadResultsRequest
                         )
                         conn.commit()
             finally:
-                conn.close()
+                database.release_connection(conn)
 
         updated = database.update_emission_factor_upload_results(
             upload_id=upload_id,
