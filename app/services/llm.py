@@ -184,13 +184,16 @@ def build_extraction_prompt(
     )
 
     unit_rule = (
-        "- For `unit_of_measurement`: extract the physical unit EXACTLY as it appears in the document (e.g., \"litre\", \"kg\", \"kWh\", \"m³\", \"gallon\", \"tonne\"). NOT currency."
+        "- For `unit_of_measurement`: extract the physical unit EXACTLY as it appears in the document (e.g., \"litre\", \"kg\", \"kWh\", \"m³\", \"gallon\", \"tonne\"). NOT currency.\n"
+        "  CRITICAL: kWh (kilowatt-hours, real energy) and kVAh (kilovolt-ampere-hours, apparent energy) are DIFFERENT units. Do NOT treat them as equivalent. Extract exactly what the document shows."
         if not available_units
         else (
             "- For `unit_of_measurement`: identify the physical quantity unit in the document, "
             "then return the EXACT name from the configured units list below that best matches it. "
             "For example if the document says \"kgs\" and the list contains \"kg\", return \"kg\". "
             "Only use the raw document value if nothing in the list matches. NOT currency.\n"
+            "  CRITICAL: kWh and kVAh are DIFFERENT units — do NOT convert or substitute one for the other. "
+            "If the invoice shows kVAh but the configured list only has kWh, return the raw value \"kVAh\" from the document.\n"
             "  Configured activity units:\n"
             + "\n".join(f"    - {u}" for u in available_units)
         )
@@ -226,7 +229,9 @@ Rules:
   If only one item was purchased, still return it inside the activities array.
   If no activity can be identified, return an empty activities array.
 - For each activity's `activity_description`: identify what was purchased (e.g., "Diesel", "Electricity", "LPG", "Coal", "R-22", "Water", "Waste", "Empty Cylinders", "R-410a Gas").
+  CRITICAL for refrigerant gases: Extract the EXACT gas designation as printed on the invoice (R-22, R-32, R-134a, R-410a, HFC-32, etc.). Do NOT confuse similar designations — R-22 and R-32 are completely different chemicals. Read the number carefully from the document text.
 - For each activity's `total_quantity`: extract the total physical quantity (not monetary). Sum line item quantities if needed.
+  For electricity bills: prefer kWh (real energy consumed) over kVAh (apparent energy). Look for fields labeled "Units Consumed", "Energy Consumed", "kWh", or "Total Units" rather than "kVAh" or "Demand" values. Only use kVAh if kWh is not present.
 {unit_rule}
 {emission_category_rule}
 {column_config_section}
