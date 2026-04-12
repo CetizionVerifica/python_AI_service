@@ -16,6 +16,7 @@ from app.schemas.emission_factor import (
     ParseExcelResponse,
     DbCategory,
     CategorySuggestion,
+    ColumnHeader,
 )
 from app.core.database import get_connection, release_connection, get_uploaded_document_by_id, fetch_emission_factor, bulk_insert_emissions_with_conn, fetch_column_config
 
@@ -140,10 +141,25 @@ deterministically extract all data rows. Analyze the header rows to determine:
 6. DATA START ROW — the first row number containing actual data values (not headers).
 
 7. YEAR COLUMNS — for each year detected:
-   - "simple": provide `value_column` (the column index).
+   - "simple": provide `value_column` (the column index of the FACTOR VALUE, NOT the year label).
    - "sub_columns": provide `sub_columns` (list of {name, column_index}) and
      `primary_sub_column` (name of the sub-column to use, usually "Total").
    - "disposal_pivot": provide `disposal_columns` (list of {name, column_index}).
+
+CRITICAL — FACTOR VALUE vs YEAR LABEL DISAMBIGUATION:
+   Sometimes a sheet has a single numeric factor value column (e.g. header "Emission factors",
+   "Factor", "Value") AND separate year columns that just list which years the factor applies to.
+   For example:
+     | Ef Category | Unit | Emission factors | year |      |      |      |
+     | Diesel      | USD  | 0.134            | 2025 | 2024 | 2023 | 2022 |
+   Here column 3 ("Emission factors") holds the actual factor value (0.134).
+   Columns 4-7 hold year LABELS (2025, 2024, 2023, 2022) — they indicate this
+   factor applies to all those years, but the VALUE is the SAME for each year (0.134).
+   In this case you MUST set `value_column` to the factor value column (3), NOT
+   to the year label columns (4-7). Each year entry should share the same value_column.
+   Key signal: if the data cells in columns 4+ are year-like integers (2015-2035)
+   and a separate column has small decimal values, those integers are year labels,
+   not factor values.
 
 Return ONLY a JSON object with this exact structure (no extra text):
 {
@@ -446,34 +462,128 @@ def _disambiguate_by_unit(
 
 
 # ---------------------------------------------------------------------------
+# Column header extraction — for user-facing column mapping UI
+# ---------------------------------------------------------------------------
+
+def _read_available_columns(ws, max_sample_rows: int = 5) -> list[ColumnHeader]:
+    """Read all column headers from the worksheet with a few sample values."""
+    columns: list[ColumnHeader] = []
+
+    # Read header row (row 1)
+    header_row = list(ws.iter_rows(min_row=1, max_row=1, values_only=False))[0]
+
+    for cell in header_row:
+        header_name = str(cell.value).strip() if cell.value is not None else f"Column {cell.column}"
+        # Gather sample values from next few rows
+        samples: list[str] = []
+        for data_row in ws.iter_rows(
+            min_row=2,
+            max_row=min(1 + max_sample_rows, ws.max_row),
+            min_col=cell.column,
+            max_col=cell.column,
+            values_only=True,
+        ):
+            val = data_row[0]
+            if val is not None:
+                samples.append(str(val)[:80])  # truncate long values
+        columns.append(ColumnHeader(
+            column_index=cell.column,
+            header_name=header_name,
+            sample_values=samples,
+        ))
+
+    return columns
+
+
+# ---------------------------------------------------------------------------
+# Validation — catch factor values that look like year numbers
+# ---------------------------------------------------------------------------
+
+def _validate_factors(
+    factors: list[EmissionFactorRecord],
+) -> list[str]:
+    """
+    Post-extraction sanity checks. Returns warnings for suspicious data.
+    Catches the bug where year numbers (2020-2030) are read as factor values.
+    """
+    warnings: list[str] = []
+    current_year = 2026
+    year_range = set(range(2015, current_year + 10))
+
+    year_value_count = sum(
+        1 for f in factors if int(f.factor_value) == f.factor_value and int(f.factor_value) in year_range
+    )
+    total = len(factors)
+
+    if total > 0 and year_value_count / total > 0.5:
+        warnings.append(
+            f"DATA QUALITY WARNING: {year_value_count}/{total} factor values "
+            f"look like year numbers (e.g. 2022, 2023). The column mapping may "
+            f"be incorrect — the system might be reading year labels as factor "
+            f"values. Please verify the 'Factor Value' column mapping."
+        )
+
+    return warnings
+
+
+# ---------------------------------------------------------------------------
 # Public entry point — Emission Factor Excel Parser
 # ---------------------------------------------------------------------------
 
 def parse_emission_factor_excel(
-    file_path: Path, filename: str
+    file_path: Path, filename: str, sheet_name: Optional[str] = None,
+    schema_override: Optional[dict] = None,
 ) -> ParseExcelResponse:
-    """Main entry: two-pass Excel parsing."""
-    wb = openpyxl.load_workbook(str(file_path), data_only=True)
-    ws = wb.active
+    """Main entry: two-pass Excel parsing.
 
-    # Pass 1: Schema detection via LLM
-    header_text = _read_header_rows(ws, max_rows=20)
-    logger.info(f"Pass 1: Detecting schema for {filename}")
-    schema = _detect_schema(header_text)
-    logger.info(
-        f"Detected layout: {schema.layout_type}, "
-        f"years: {[y.year for y in schema.years]}, "
-        f"descriptors: {[d.header_name for d in schema.descriptor_columns]}"
-    )
+    Args:
+        file_path: Path to the Excel file.
+        filename: Original filename (for logging / response).
+        sheet_name: Specific sheet to parse. If None, uses the first sheet.
+        schema_override: If provided, skip LLM detection and use this schema
+                         directly for extraction. Allows user column mapping overrides.
+    """
+    wb = openpyxl.load_workbook(str(file_path), data_only=True)
+    sheet_names = wb.sheetnames
+
+    # Select worksheet
+    if sheet_name and sheet_name in sheet_names:
+        ws = wb[sheet_name]
+        selected_sheet = sheet_name
+    else:
+        ws = wb[sheet_names[0]]
+        selected_sheet = sheet_names[0]
+
+    # Read available columns for the mapping UI
+    available_columns = _read_available_columns(ws)
+
+    if schema_override:
+        # User provided column mapping — skip LLM, extract directly
+        logger.info(f"Using user-provided schema override for {filename}")
+        schema = SpreadsheetSchema(**schema_override)
+    else:
+        # Pass 1: Schema detection via LLM
+        header_text = _read_header_rows(ws, max_rows=20)
+        logger.info(f"Pass 1: Detecting schema for {filename}")
+        schema = _detect_schema(header_text)
+        logger.info(
+            f"Detected layout: {schema.layout_type}, "
+            f"years: {[y.year for y in schema.years]}, "
+            f"descriptors: {[d.header_name for d in schema.descriptor_columns]}"
+        )
 
     # Pass 2: Deterministic extraction
-    logger.info(f"Pass 2: Extracting factors from {filename}")
+    logger.info(f"Pass 2: Extracting factors from {filename} (sheet: {selected_sheet})")
     factors, warnings = _extract_factors(ws, schema)
 
     wb.close()
 
     # Pass 3: Disambiguate duplicate names that differ only by unit
     factors = _disambiguate_by_unit(factors)
+
+    # Pass 4: Validate extracted data for suspicious patterns
+    validation_warnings = _validate_factors(factors)
+    warnings.extend(validation_warnings)
 
     available_years = sorted(set(f.year for f in factors))
     parent_categories = sorted(
@@ -482,7 +592,7 @@ def parse_emission_factor_excel(
 
     logger.info(
         f"Extracted {len(factors)} emission factor records "
-        f"across years {available_years} from {filename}"
+        f"across years {available_years} from {filename} (sheet: {selected_sheet})"
     )
 
     return ParseExcelResponse(
@@ -493,6 +603,9 @@ def parse_emission_factor_excel(
         total_records=len(factors),
         available_years=available_years,
         parent_categories=parent_categories,
+        sheet_names=sheet_names,
+        selected_sheet=selected_sheet,
+        available_columns=available_columns,
     )
 
 

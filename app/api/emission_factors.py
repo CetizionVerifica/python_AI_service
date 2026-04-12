@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.services import storage
 from app.services.excel_parser import parse_emission_factor_excel, infer_category_mapping
+from app.services import storage as storage_service
 from app.schemas.emission_factor import (
     ParseExcelResponse,
     DbCategory,
@@ -28,6 +29,7 @@ async def parse_emission_factor_file(
     file: UploadFile = File(...),
     db_categories: Optional[str] = Form(None),
     uploaded_by: Optional[int] = Form(None),
+    sheet_name: Optional[str] = Form(None),
 ):
     """
     Upload an emission factor Excel file and get structured, editable preview data.
@@ -39,6 +41,7 @@ async def parse_emission_factor_file(
     The file is persisted to Cloudinary and an upload record is created in the DB.
     Optionally accepts `db_categories` (JSON string) to auto-infer
     category mappings via LLM in the same request.
+    Optionally accepts `sheet_name` to parse a specific sheet instead of the first.
     """
     filename = file.filename or "unknown.xlsx"
 
@@ -61,7 +64,7 @@ async def parse_emission_factor_file(
         # parse is sync+CPU-bound — also run in executor to not block
         parse_task = loop.run_in_executor(
             None,
-            lambda: parse_emission_factor_excel(file_path, filename),
+            lambda: parse_emission_factor_excel(file_path, filename, sheet_name=sheet_name),
         )
 
         raw = await asyncio.gather(cloud_task, parse_task, return_exceptions=True)
@@ -130,6 +133,96 @@ async def parse_emission_factor_file(
     finally:
         if file_path:
             storage.cleanup(file_path)
+
+
+# ---------------------------------------------------------------------------
+# Re-analyze: change sheet or override column mapping without re-uploading
+# ---------------------------------------------------------------------------
+
+class ReAnalyzeRequest(BaseModel):
+    upload_id: int
+    sheet_name: Optional[str] = None
+    schema_override: Optional[dict] = None
+    db_categories: Optional[list[dict]] = None
+
+
+@router.post(
+    "/emission-factors/re-analyze",
+    response_model=ParseExcelResponse,
+)
+async def re_analyze_emission_factor_file(body: ReAnalyzeRequest):
+    """
+    Re-parse a previously uploaded emission factor file with a different sheet
+    or column mapping. Downloads the file from Cloudinary using the upload record,
+    so the user doesn't need to re-upload.
+    """
+    # Look up the upload record to get the Cloudinary URL
+    try:
+        uploads = database.get_emission_factor_uploads()
+        upload_row = next(
+            (u for u in uploads if u["id"] == body.upload_id), None
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to look up upload: {e}")
+
+    if not upload_row:
+        raise HTTPException(status_code=404, detail="Upload record not found")
+
+    cloudinary_url = upload_row.get("cloudinary_url")
+    if not cloudinary_url:
+        raise HTTPException(
+            status_code=422,
+            detail="No file URL found for this upload. Please re-upload the file.",
+        )
+
+    filename = upload_row.get("file_name", "unknown.xlsx")
+    file_path = None
+    try:
+        file_path = await storage_service.download_from_url(cloudinary_url, filename)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: parse_emission_factor_excel(
+                file_path,
+                filename,
+                sheet_name=body.sheet_name,
+                schema_override=body.schema_override,
+            ),
+        )
+
+        if not result.factors:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "No emission factor data could be extracted from this sheet. "
+                    "Please try a different sheet or check the column mapping."
+                ),
+            )
+
+        # Infer category mapping if DB categories were provided
+        if body.db_categories and result.parent_categories:
+            try:
+                cats = [DbCategory(**c) for c in body.db_categories]
+                result.category_suggestions = infer_category_mapping(
+                    result.parent_categories, cats
+                )
+            except Exception as e:
+                logger.warning(f"Category inference failed (non-fatal): {e}")
+
+        result.upload_id = body.upload_id
+        result.cloudinary_url = cloudinary_url
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Re-analyze failed for upload {body.upload_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Re-analyze failed: {str(e)}")
+    finally:
+        if file_path:
+            storage_service.cleanup(file_path)
 
 
 # ---------------------------------------------------------------------------
