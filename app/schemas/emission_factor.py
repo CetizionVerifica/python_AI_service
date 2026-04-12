@@ -58,6 +58,13 @@ class CategorySuggestion(BaseModel):
     confidence: str = "low"  # "high" | "medium" | "low"
 
 
+class ColumnHeader(BaseModel):
+    """A column header from the spreadsheet, for user-facing column mapping UI."""
+    column_index: int
+    header_name: str
+    sample_values: list[str] = []  # first few non-empty values for preview
+
+
 class ParseExcelResponse(BaseModel):
     filename: str
     factors: list[EmissionFactorRecord]
@@ -69,6 +76,10 @@ class ParseExcelResponse(BaseModel):
     category_suggestions: list[CategorySuggestion] = []
     upload_id: Optional[int] = None
     cloudinary_url: Optional[str] = None
+    # Sheet & column metadata for user override UI
+    sheet_names: list[str] = []
+    selected_sheet: Optional[str] = None
+    available_columns: list[ColumnHeader] = []
 
 
 class EmissionFactorUploadRecord(BaseModel):
