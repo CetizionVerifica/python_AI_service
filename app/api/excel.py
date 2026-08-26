@@ -8,6 +8,7 @@ from app.services.excel_parser import (
     get_unique_categories,
     get_preview_rows,
     import_all_rows,
+    read_headers_from_bytes,
 )
 from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document, get_uploaded_document_by_id
 from app.core.config import settings
@@ -37,21 +38,10 @@ async def upload_excel(file: UploadFile = File(...)):
         if len(contents) > 100 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="File size exceeds 100 MB limit.")
 
-        # parse headers — try row 0, 1, 2 (same as excel_parser)
-        headers: list[str] = []
-        for header_row in (0, 1, 2):
-            try:
-                if ext == "csv":
-                    df = pd.read_csv(io.BytesIO(contents), dtype=str, nrows=5, header=header_row)
-                else:
-                    df = pd.read_excel(io.BytesIO(contents), dtype=str, nrows=5, header=header_row)
-
-                cols = [c for c in df.columns if not str(c).startswith("Unnamed:")]
-                if cols:
-                    headers = [str(c).strip() for c in cols]
-                    break
-            except Exception:
-                continue
+        # Parse headers using the same detection the import path uses, so the
+        # columns offered on the mapping screen are exactly the ones that will
+        # be read back later.
+        headers = read_headers_from_bytes(contents, ext)
 
         if not headers:
             raise ValueError("The uploaded file appears to be empty or has no columns.")
