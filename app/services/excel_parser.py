@@ -2,6 +2,7 @@ import io
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -737,15 +738,71 @@ UNIT_CONVERSIONS = {
     "gj": {"kwh": 277.778, "mwh": 0.277778, "mj": 1000},
     "mj": {"kwh": 0.277778, "gj": 0.001},
 
-    # Currency
-    "inr": {"usd": 0.012},
-    "usd": {"inr": 83.5, "eur": 0.92},
-    "eur": {"usd": 1.09},
+    # Currency — seed values only. Refreshed from live rates by _refresh_fx_rates()
+    # below; these are the fallback when the FX provider is unreachable.
+    "inr": {"usd": 1 / 95.77},
+    "usd": {"inr": 95.77, "eur": 0.86},
+    "eur": {"usd": 1 / 0.86},
 }
+
+# --- Live currency rates -----------------------------------------------------
+# Spend-based Scope 3 factors are quoted in kgCO2e/USD, so every non-USD spend
+# is converted first. A stale hardcoded rate silently biases every one of those
+# rows (at ₹83.5 vs a live ₹95.77 that was a ~15% over-report), so the table is
+# refreshed from live rates and only falls back to the seeds above on failure.
+_FX_TTL_SECONDS = 12 * 60 * 60
+_fx_last_refresh: float = 0.0
+_CURRENCY_UNITS = {"inr", "usd", "eur"}
+
+_FX_PROVIDERS = (
+    ("https://open.er-api.com/v6/latest/USD", lambda d: d.get("rates")),
+    ("https://api.frankfurter.app/latest?from=USD", lambda d: d.get("rates")),
+)
+
+
+def _fetch_usd_rates() -> dict | None:
+    for url, extract in _FX_PROVIDERS:
+        try:
+            resp = requests.get(url, timeout=8)
+            resp.raise_for_status()
+            rates = extract(resp.json()) or {}
+            if rates.get("INR"):
+                return rates
+        except Exception as e:
+            logger.warning(f"[fx] provider {url} failed: {e}")
+    return None
+
+
+def _refresh_fx_rates(force: bool = False) -> None:
+    """Refresh USD->INR/EUR in UNIT_CONVERSIONS. Safe to call often; TTL-guarded."""
+    global _fx_last_refresh
+    now = time.time()
+    if not force and (now - _fx_last_refresh) < _FX_TTL_SECONDS:
+        return
+
+    rates = _fetch_usd_rates()
+    if not rates:
+        # Keep whatever is already in the table rather than failing the import.
+        logger.warning("[fx] Could not refresh currency rates; keeping previous values.")
+        _fx_last_refresh = now  # don't hammer a down provider on every row
+        return
+
+    inr, eur = rates.get("INR"), rates.get("EUR")
+    if inr:
+        UNIT_CONVERSIONS["usd"]["inr"] = float(inr)
+        UNIT_CONVERSIONS["inr"]["usd"] = 1 / float(inr)  # exact inverse, no round-trip drift
+    if eur:
+        UNIT_CONVERSIONS["usd"]["eur"] = float(eur)
+        UNIT_CONVERSIONS["eur"]["usd"] = 1 / float(eur)
+    _fx_last_refresh = now
+    logger.info(f"[fx] rates refreshed: USD->INR={inr}, USD->EUR={eur}")
+
 
 def get_conversion_factor(from_unit: str, to_unit: str):
     f = (from_unit or "").lower().strip()
     t = (to_unit or "").lower().strip()
+    if f in _CURRENCY_UNITS or t in _CURRENCY_UNITS:
+        _refresh_fx_rates()
     return UNIT_CONVERSIONS.get(f, {}).get(t)
 
 def units_match_exact(u1: str | None, u2: str | None) -> bool:
@@ -754,21 +811,96 @@ def units_match_exact(u1: str | None, u2: str | None) -> bool:
     return u1.lower().strip() == u2.lower().strip()
 
 # ---------- Excel reading ----------
-def _read_df_from_bytes(content: bytes, ext: str) -> pd.DataFrame:
-    for header_row in [0, 1, 2]:
-        try:
-            if ext == "csv":
-                df = pd.read_csv(io.BytesIO(content), dtype=str, header=header_row)
-            else:
-                df = pd.read_excel(io.BytesIO(content), dtype=str, header=header_row)
+# How many leading rows to consider as candidate header rows. Real client
+# workbooks often carry a title banner, a blank spacer, and sometimes a row of
+# column-letter labels before the actual headers.
+_HEADER_SCAN_ROWS = 10
 
-            valid_cols = [c for c in df.columns if not str(c).startswith("Unnamed:")]
-            if valid_cols:
-                df = df.fillna("")
-                return df
+# A row whose non-empty cells are all short uppercase letter codes ("A", "B",
+# "AC") is a column-letter legend, not data. Glochem's sheets carry one directly
+# under the header row.
+_LETTER_LABEL_RE = re.compile(r"^[A-Z]{1,2}$")
+
+
+def _clean_header(name) -> str:
+    """
+    Collapse a header cell to a single-line, single-spaced string.
+
+    Excel headers routinely wrap ("Received\\nDate", "UOM\\nINR/USD"). The mapping
+    screen and the import must agree on the exact spelling, so both go through here.
+    """
+    return re.sub(r"\s+", " ", str(name)).strip()
+
+
+def _named_columns(df: pd.DataFrame) -> list[str]:
+    """Columns that came from a real header cell (not pandas' Unnamed: N filler)."""
+    return [
+        c for c in df.columns
+        if not str(c).startswith("Unnamed:") and str(c).strip() and str(c).strip().lower() != "nan"
+    ]
+
+
+def _read_raw(content: bytes, ext: str, header_row: int, nrows: int | None = None) -> pd.DataFrame:
+    if ext == "csv":
+        return pd.read_csv(io.BytesIO(content), dtype=str, header=header_row, nrows=nrows)
+    return pd.read_excel(io.BytesIO(content), dtype=str, header=header_row, nrows=nrows)
+
+
+def detect_header_row(content: bytes, ext: str) -> int:
+    """
+    Pick the row that best looks like the header row.
+
+    The previous logic took the *first* row that produced any named column, which
+    on a workbook with a merged title banner returns that banner as a lone bogus
+    header. Scoring every candidate and keeping the richest one handles banners,
+    blank spacers and multi-line titles alike.
+    """
+    best_row, best_score = 0, -1
+    for header_row in range(_HEADER_SCAN_ROWS):
+        try:
+            df = _read_raw(content, ext, header_row, nrows=5)
         except Exception:
             continue
-    raise ValueError("Failed to parse file: no valid headers found.")
+        named = _named_columns(df)
+        # A single named column is almost always a merged title cell.
+        if len(named) < 2:
+            continue
+        if len(named) > best_score:
+            best_score, best_row = len(named), header_row
+    if best_score < 0:
+        raise ValueError("Failed to parse file: no valid headers found.")
+    return best_row
+
+
+def _drop_legend_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop column-letter legend rows (e.g. 'A | B | C | D') sitting under the header."""
+    def is_legend(row) -> bool:
+        vals = [str(v).strip() for v in row.tolist() if str(v).strip()]
+        return len(vals) >= 3 and all(_LETTER_LABEL_RE.match(v) for v in vals)
+
+    keep = ~df.apply(is_legend, axis=1)
+    dropped = int((~keep).sum())
+    if dropped:
+        logger.info(f"Dropped {dropped} column-letter legend row(s) below the header.")
+    return df[keep]
+
+
+def read_headers_from_bytes(content: bytes, ext: str) -> list[str]:
+    """Header names as the import will see them — same detection as _read_df_from_bytes."""
+    header_row = detect_header_row(content, ext)
+    df = _read_raw(content, ext, header_row, nrows=5)
+    return [_clean_header(c) for c in _named_columns(df)]
+
+
+def _read_df_from_bytes(content: bytes, ext: str) -> pd.DataFrame:
+    header_row = detect_header_row(content, ext)
+    df = _read_raw(content, ext, header_row)
+    df = df.fillna("")
+    df = _drop_legend_rows(df)
+    # Match the spelling handed to the mapping screen by read_headers_from_bytes.
+    df.columns = [_clean_header(c) for c in df.columns]
+    logger.info(f"Parsed sheet using header row {header_row + 1}; {len(df)} data rows.")
+    return df
 
 def map_df(df: pd.DataFrame, mappings: dict[str, str]) -> pd.DataFrame:
     mapped = {}
@@ -888,6 +1020,90 @@ def _build_category_resolver(site_id: int, category_id: int) -> dict[str, str]:
     return resolver
 
 
+# ---------- Per-row reporting dates ----------
+# A client export typically holds a full year of transactions with a real date on
+# every line. Mapping that column lets one upload land in the right month (and the
+# right year-lagged emission factor) per row, instead of stamping the whole file
+# with a single import date.
+
+_DATE_FIELD = "date_of_reporting"
+
+
+def _parse_row_date(value, fallback: str) -> str:
+    """
+    Normalise a spreadsheet date cell to YYYY-MM-DD.
+
+    Day-first is assumed for ambiguous numeric dates: these are Indian client
+    exports where 03.04.2025 means 3 April, not 4 March. Falls back to the
+    import-level date when the cell is blank or unparseable.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return fallback
+    try:
+        ts = pd.to_datetime(raw, dayfirst=True, errors="coerce")
+        if pd.isna(ts):
+            return fallback
+        return ts.strftime("%Y-%m-%d")
+    except Exception:
+        return fallback
+
+
+def _row_reporting_date(activity_data: dict, fallback: str) -> str:
+    """Per-row date if a date column was mapped, otherwise the import-level date."""
+    if _DATE_FIELD in activity_data:
+        return _parse_row_date(activity_data.get(_DATE_FIELD), fallback)
+    return fallback
+
+
+def _factor_year(date_of_reporting: str, fallback_year: int) -> int:
+    """Emission factors lag the reporting year by one (year N uses N-1)."""
+    try:
+        return int(str(date_of_reporting)[:4]) - 1
+    except (TypeError, ValueError):
+        return fallback_year
+
+
+def _load_factor_index(conn, site_id: int, category_id: int) -> dict[str, list[dict]]:
+    """
+    All emission factors for (site, category), grouped by lowercased name,
+    newest year first. Indexing every year up front means each row can pick the
+    factor for its own year without another query.
+    """
+    index: dict[str, list[dict]] = {}
+    try:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT emission_factor_id, emission_category_name, global_category_name,
+                       factor_value, denominator_unit, source, year
+                FROM emission_factors
+                WHERE site_id = %s AND category_id = %s
+                ORDER BY year DESC
+                """,
+                (site_id, category_id),
+            )
+            for row in cur.fetchall():
+                name = (row["emission_category_name"] or "").strip().lower()
+                if name:
+                    index.setdefault(name, []).append(row)
+    except Exception as e:
+        logger.warning(f"Failed to preload emission factors: {e}")
+    return index
+
+
+def _pick_factor(index: dict[str, list[dict]], name_key: str, year: int) -> dict | None:
+    """Exact year match if present, else the most recent year on file."""
+    rows = index.get(name_key)
+    if not rows:
+        return None
+    for r in rows:
+        if r["year"] == year:
+            return r
+    return rows[0]  # already sorted year DESC
+
+
 # ---------- Step 2: unique categories ----------
 def get_unique_categories(document_id: int, mappings: dict[str, str]) -> tuple[list[str], int]:
     content, ext = download_document_bytes(document_id)
@@ -936,40 +1152,16 @@ def get_preview_rows(
     conn = get_connection()
     try:
         out: list[dict] = []
-        year = int(date_of_reporting[:4]) - 1
+        default_year = _factor_year(date_of_reporting, 0)
 
-        # Batch-load all emission factors for this (site, category)
-        # instead of querying per row (N+1 → 1 query).
-        # Load ALL years and prefer exact year match, fallback to latest.
-        ef_map: dict[str, tuple[float, str | None]] = {}
-        try:
-            from psycopg2.extras import RealDictCursor
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT emission_category_name, factor_value, denominator_unit, year
-                    FROM emission_factors
-                    WHERE site_id = %s AND category_id = %s
-                    ORDER BY year DESC
-                    """,
-                    (site_id, category_id),
-                )
-                # Group by name, prefer exact year match, fallback to latest year
-                all_factors: dict[str, list[dict]] = {}
-                for row in cur.fetchall():
-                    name = (row["emission_category_name"] or "").strip().lower()
-                    if name:
-                        all_factors.setdefault(name, []).append(row)
-                for name, rows in all_factors.items():
-                    exact = [r for r in rows if r["year"] == year]
-                    best = exact[0] if exact else rows[0]  # rows already sorted DESC
-                    ef_map[name] = (float(best["factor_value"]), best.get("denominator_unit"))
-        except Exception as e:
-            logger.warning(f"Failed to preload emission factors for preview: {e}")
+        # Batch-load all emission factors for this (site, category) instead of
+        # querying per row (N+1 → 1 query). All years are indexed so each row can
+        # pick the factor matching its own reporting date.
+        factor_index = _load_factor_index(conn, site_id, category_id)
 
         logger.info(
             f"Preview EF lookup: site_id={site_id}, category_id={category_id}, "
-            f"year={year}, ef_map_keys={list(ef_map.keys())}, "
+            f"default_year={default_year}, ef_names={list(factor_index.keys())}, "
             f"category_resolver_keys={list(category_resolver.keys())}"
         )
 
@@ -977,6 +1169,9 @@ def get_preview_rows(
             activity_data = r.to_dict()
             activity_unit = str(activity_data.get("activity_data_unit") or "").strip() or None
             emission_category = str(activity_data.get("emission_category") or "").strip()
+
+            row_date = _row_reporting_date(activity_data, date_of_reporting)
+            row_year = _factor_year(row_date, default_year)
 
             factor_value = None
             denominator_unit = None
@@ -989,16 +1184,17 @@ def get_preview_rows(
                 # fall back to direct name match if no mapping exists
                 resolved = category_resolver.get(display_key)
                 ef_key = resolved.strip().lower() if resolved else display_key
-                ef_entry = ef_map.get(ef_key)
-                if not ef_entry:
+                ef_row = _pick_factor(factor_index, ef_key, row_year)
+                if not ef_row:
                     logger.warning(
                         f"No emission factor found for category '{emission_category}' "
-                        f"(ef_key='{ef_key}', resolved='{resolved}'). "
-                        f"Available keys: {list(ef_map.keys())}"
+                        f"(ef_key='{ef_key}', resolved='{resolved}', year={row_year}). "
+                        f"Available keys: {list(factor_index.keys())}"
                     )
-                if ef_entry:
+                if ef_row:
                     global_category_name = resolved if resolved else emission_category
-                    factor_value, denominator_unit = ef_entry
+                    factor_value = float(ef_row["factor_value"])
+                    denominator_unit = ef_row.get("denominator_unit")
                     activity_value = _extract_activity_value(activity_data)
                     if activity_value > 0:
                         if units_match_exact(denominator_unit, activity_unit):
@@ -1019,6 +1215,7 @@ def get_preview_rows(
             row_out["denominator_unit"] = denominator_unit
             row_out["total_emission"] = total_emission
             row_out["unit"] = "tCO2e"
+            row_out[_DATE_FIELD] = row_date
 
             out.append(row_out)
 
@@ -1165,68 +1362,17 @@ def import_all_rows(
     inserted = 0
     skipped = 0
 
-    year = int(date_of_reporting[:4]) - 1
-    ef_map: dict[str, dict] = {}
-    try:
-        from psycopg2.extras import RealDictCursor
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT emission_factor_id, emission_category_name, global_category_name,
-                       factor_value, denominator_unit, source, year
-                FROM emission_factors
-                WHERE site_id = %s
-                  AND category_id = %s
-                ORDER BY year DESC
-                """,
-                (site_id, category_id),
-            )
-            # Group by name, prefer exact year match, fallback to latest year
-            all_factors: dict[str, list[dict]] = {}
-            for row in cur.fetchall():
-                name = (row["emission_category_name"] or "").strip().lower()
-                if not name:
-                    continue
-                all_factors.setdefault(name, []).append(row)
-            for name, rows in all_factors.items():
-                exact = [r for r in rows if r["year"] == year]
-                best = exact[0] if exact else rows[0]  # rows already sorted DESC
-                ef_map[name] = best
-    except Exception as e:
-        logger.warning(f"Failed to preload emission factors for import: {e}")
-        ef_map = {}
+    default_year = _factor_year(date_of_reporting, 0)
+    # Index every year up front so each row can use the factor matching its own
+    # reporting date — one query regardless of how many months the sheet spans.
+    factor_index = _load_factor_index(conn, site_id, category_id)
 
     # FERA (Fuel and Energy Related Activities) - preload FERA emission factors
     FERA_CATEGORY_ID = 28
     FERA_TRIGGER_CATEGORIES = {1, 2, 4}  # Stationary Combustion, Mobile Combustion, Purchased Electricity
-    fera_ef_map: dict[str, dict] = {}
+    fera_factor_index: dict[str, list[dict]] = {}
     if category_id in FERA_TRIGGER_CATEGORIES:
-        try:
-            from psycopg2.extras import RealDictCursor
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT emission_factor_id, emission_category_name, global_category_name,
-                           factor_value, denominator_unit, source, year
-                    FROM emission_factors
-                    WHERE site_id = %s
-                      AND category_id = %s
-                    ORDER BY year DESC
-                    """,
-                    (site_id, FERA_CATEGORY_ID),
-                )
-                fera_all_factors: dict[str, list[dict]] = {}
-                for row in cur.fetchall():
-                    name = (row["emission_category_name"] or "").strip().lower()
-                    if not name:
-                        continue
-                    fera_all_factors.setdefault(name, []).append(row)
-                for name, rows in fera_all_factors.items():
-                    exact = [r for r in rows if r["year"] == year]
-                    best = exact[0] if exact else rows[0]
-                    fera_ef_map[name] = best
-        except Exception as e:
-            logger.warning(f"Failed to preload FERA emission factors: {e}")
+        fera_factor_index = _load_factor_index(conn, site_id, FERA_CATEGORY_ID)
 
     try:
         rows_buffer: list[dict] = []
@@ -1247,13 +1393,20 @@ def import_all_rows(
             activity_unit = str(activity_data.get("activity_data_unit") or "").strip() or None
             emission_category = str(activity_data.get("emission_category") or "").strip()
 
+            # Each row carries its own reporting date when a date column was
+            # mapped, so a single upload can span a whole year month by month.
+            # Popped so the raw date cell can't be mistaken for an activity value.
+            row_date = _row_reporting_date(activity_data, date_of_reporting)
+            row_year = _factor_year(row_date, default_year)
+            activity_data.pop(_DATE_FIELD, None)
+
             matched_ef: dict | None = None
-            if ef_map and emission_category:
+            if factor_index and emission_category:
                 display_key = emission_category.strip().lower()
                 resolved = category_resolver.get(display_key)
                 ef_key = resolved.strip().lower() if resolved else display_key
-                if ef_key in ef_map:
-                    matched_ef = ef_map[ef_key]
+                matched_ef = _pick_factor(factor_index, ef_key, row_year)
+                if matched_ef:
                     factor_value = float(matched_ef.get("factor_value") or 0)
                     denom_unit = matched_ef.get("denominator_unit")
                     activity_value = _extract_activity_value(activity_data)
@@ -1270,7 +1423,7 @@ def import_all_rows(
                 else:
                     total_emission = 0.0
             else:
-                total_emission = _calc_emission(conn, site_id, category_id, activity_data, activity_unit, date_of_reporting)
+                total_emission = _calc_emission(conn, site_id, category_id, activity_data, activity_unit, row_date)
 
             ef_snapshot = None
             if matched_ef:
@@ -1292,7 +1445,7 @@ def import_all_rows(
                     "extra_data": extra_data,
                     "total_emission": total_emission,
                     "unit": "tCO2e",
-                    "date_of_reporting": date_of_reporting,
+                    "date_of_reporting": row_date,
                     "activity_data_unit": activity_unit,
                     "upload_batch_id": upload_batch_id,
                     "emission_factor_snapshot": ef_snapshot,
@@ -1301,12 +1454,12 @@ def import_all_rows(
             )
 
             # Auto-create FERA emission row if applicable
-            if fera_ef_map and emission_category:
+            if fera_factor_index and emission_category:
                 fera_key = emission_category.strip().lower()
                 resolved_fera = category_resolver.get(fera_key)
                 fera_lookup = resolved_fera.strip().lower() if resolved_fera else fera_key
-                if fera_lookup in fera_ef_map:
-                    fera_matched = fera_ef_map[fera_lookup]
+                fera_matched = _pick_factor(fera_factor_index, fera_lookup, row_year)
+                if fera_matched:
                     fera_factor_value = float(fera_matched.get("factor_value") or 0)
                     fera_denom_unit = fera_matched.get("denominator_unit")
                     fera_activity_value = _extract_activity_value(activity_data)
@@ -1337,7 +1490,7 @@ def import_all_rows(
                                     "extra_data": extra_data,
                                     "total_emission": fera_emission,
                                     "unit": "tCO2e",
-                                    "date_of_reporting": date_of_reporting,
+                                    "date_of_reporting": row_date,
                                     "activity_data_unit": activity_unit,
                                     "upload_batch_id": upload_batch_id,
                                     "emission_factor_snapshot": fera_ef_snapshot,
