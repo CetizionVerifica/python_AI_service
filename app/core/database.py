@@ -372,12 +372,16 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # 1. Fetch the column_config row
+            # ORDER BY config_name mirrors the entry form and the Node backend,
+            # which both use configs[0] of the name-sorted list — all three
+            # engines must read one and the same config.
             cur.execute(
                 """
                 SELECT pk_id, config_name, column_options, column_dependencies,
-                       dependent_options, emission_category_mapping
+                       dependent_options, emission_category_mapping, calculation
                 FROM column_config
                 WHERE site_id = %s AND category_id = %s
+                ORDER BY config_name ASC
                 LIMIT 1
                 """,
                 (site_id, category_id),
@@ -390,7 +394,9 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
             config_id = config["pk_id"]
 
             # Parse JSONB fields that may come back as strings
-            for field in ("column_options", "column_dependencies", "dependent_options", "emission_category_mapping"):
+            # (calculation stays None when the column is null — callers treat
+            # None as "normal one-value category")
+            for field in ("column_options", "column_dependencies", "dependent_options", "emission_category_mapping", "calculation"):
                 val = config.get(field)
                 if isinstance(val, str):
                     try:
@@ -418,35 +424,6 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
     except Exception as e:
         logger.warning(f"fetch_column_config failed for site={site_id}, category={category_id}: {e}")
         return None
-    finally:
-        release_connection(conn)
-
-def has_calculation_spec(site_id: int, category_id: int) -> bool:
-    """
-    True when the site+category's column config carries a multi-field
-    calculation spec (column_config.calculation, e.g. Use of Sold Products).
-    Bulk upload must refuse those categories: this engine computes ONE
-    activity value x factor, so it would silently store wrong totals.
-    Mirrors the config the entry form uses (first config by config_name).
-    """
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT calculation IS NOT NULL
-                FROM column_config
-                WHERE site_id = %s AND category_id = %s
-                ORDER BY config_name ASC
-                LIMIT 1
-                """,
-                (site_id, category_id),
-            )
-            row = cur.fetchone()
-            return bool(row and row[0])
-    except Exception as e:
-        logger.warning(f"has_calculation_spec failed for site={site_id}, category={category_id}: {e}")
-        return False
     finally:
         release_connection(conn)
 
