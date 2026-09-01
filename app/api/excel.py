@@ -10,7 +10,7 @@ from app.services.excel_parser import (
     import_all_rows,
     read_headers_from_bytes,
 )
-from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document, get_uploaded_document_by_id
+from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document, get_uploaded_document_by_id, has_calculation_spec
 from app.core.config import settings
 
 import pandas as pd
@@ -99,6 +99,15 @@ def preview(payload: dict):
         category_id = int(payload.get("category_id"))
         date_of_reporting = str(payload.get("date_of_reporting"))
 
+        # Multi-field calculation categories (e.g. Use of Sold Products)
+        # multiply several columns together; this engine only knows one
+        # value x factor, so refuse rather than silently miscalculate.
+        if has_calculation_spec(site_id, category_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Bulk upload is not available for this category yet. Please use Add New Entries.",
+            )
+
         rows, total = get_preview_rows(
             document_id=document_id,
             mappings=mappings,
@@ -111,6 +120,8 @@ def preview(payload: dict):
         )
         return {"rows": rows, "total_rows": total, "page": page, "page_size": page_size}
 
+    except HTTPException:
+        raise
     except (TypeError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -130,6 +141,13 @@ def bulk_import(payload: dict):
         user_id = payload.get("user_id")
         if user_id is not None:
             user_id = int(user_id)
+
+        # Same guard as /preview — see comment there.
+        if has_calculation_spec(site_id, category_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Bulk upload is not available for this category yet. Please use Add New Entries.",
+            )
 
         res = import_all_rows(
             document_id=document_id,
@@ -154,6 +172,8 @@ def bulk_import(payload: dict):
             logger.warning(f"Failed to cleanup temp file for document {document_id}", exc_info=True)
 
         return res
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
