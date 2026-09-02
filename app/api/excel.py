@@ -159,6 +159,8 @@ def preview(payload: dict):
         )
         return {"rows": rows, "total_rows": total, "page": page, "page_size": page_size}
 
+    except HTTPException:
+        raise
     except (TypeError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -192,6 +194,8 @@ def bulk_import(payload: dict):
 
         # import_all_rows deletes the stored file as soon as the rows commit.
         return res
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

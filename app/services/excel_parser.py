@@ -1193,6 +1193,11 @@ def get_preview_rows(
 
     # Resolve uploaded category names → EF names via column_config mapping
     category_resolver = _build_category_resolver(site_id, category_id)
+
+    # Multi-field categories (e.g. Use of Sold Products) multiply the chosen
+    # method's fields instead of using the one-value heuristic below.
+    calc_spec = _load_calculation_spec(site_id, category_id)
+
     conn = get_connection()
     try:
         out: list[dict] = []
@@ -1216,6 +1221,7 @@ def get_preview_rows(
             denominator_unit = None
             total_emission = 0.0
             global_category_name = None
+            row_error = None
 
             if emission_category:
                 display_key = emission_category.strip().lower()
@@ -1234,7 +1240,10 @@ def get_preview_rows(
                     global_category_name = resolved if resolved else emission_category
                     factor_value = float(ef_row["factor_value"])
                     denominator_unit = ef_row.get("denominator_unit")
-                    activity_value = _extract_activity_value(activity_data)
+                    if calc_spec:
+                        activity_value, row_error = _compute_spec_activity_value(calc_spec, activity_data)
+                    else:
+                        activity_value = _extract_activity_value(activity_data)
                     if activity_value > 0:
                         if units_match_exact(denominator_unit, activity_unit):
                             total_emission = round((activity_value * factor_value) / 1000.0, 2)
@@ -1255,12 +1264,74 @@ def get_preview_rows(
             row_out["total_emission"] = total_emission
             row_out["unit"] = "tCO2e"
             row_out[_DATE_FIELD] = row_date
+            if row_error:
+                # Spec categories: says exactly which field is missing/invalid;
+                # import will SKIP this row rather than save a wrong total.
+                row_out["row_error"] = row_error
 
             out.append(row_out)
 
         return out, total
     finally:
         release_connection(conn)
+
+def _load_calculation_spec(site_id: int, category_id: int) -> dict | None:
+    """
+    Multi-field calculation spec from column_config.calculation (first user:
+    Use of Sold Products). Mirrors the Node backend's services/calculationSpec.ts:
+    when present, the activity value is the PRODUCT of the chosen method's
+    fields — never a single sniffed value.
+    """
+    try:
+        config = fetch_column_config(site_id, category_id)
+    except Exception as e:
+        logger.warning(f"Failed to load calculation spec for site={site_id}, category={category_id}: {e}")
+        return None
+    spec = (config or {}).get("calculation")
+    if (
+        isinstance(spec, dict)
+        and spec.get("mode") == "per_method"
+        and spec.get("method_column")
+        and isinstance(spec.get("methods"), dict)
+    ):
+        return spec
+    return None
+
+
+def _compute_spec_activity_value(spec: dict, activity_data: dict) -> tuple[float, str | None]:
+    """
+    Returns (product, error). Every field of the chosen method must be a
+    number > 0 (percent fields are 0-100 and divided by 100); anything else
+    is an error — a partial product would be a plausible-looking wrong total,
+    so spec rows never fall back to the one-value heuristic.
+    """
+    method_value = activity_data.get(spec["method_column"])
+    method_key = str(method_value).strip() if method_value is not None else ""
+    if not method_key or method_key.lower() == "nan":
+        return 0.0, f'Missing "{spec["method_column"]}"'
+
+    method = spec["methods"].get(method_key)
+    if not method or not method.get("multiply"):
+        return 0.0, f'Unknown {spec["method_column"]} "{method_key}"'
+
+    percent_fields = set(method.get("percent") or [])
+    product = 1.0
+    for field in method["multiply"]:
+        raw = activity_data.get(field)
+        try:
+            num = float(str(raw).replace(",", "").strip())
+        except Exception:
+            num = float("nan")
+        if not (num > 0):  # catches NaN, 0, negatives, blanks, text
+            return 0.0, f'Missing or invalid "{field}"'
+        if field in percent_fields:
+            if num > 100:
+                return 0.0, f'"{field}" cannot be more than 100'
+            product *= num / 100.0
+        else:
+            product *= num
+    return product, None
+
 
 def _extract_activity_value(activity_data: dict) -> float:
     """
@@ -1452,6 +1523,11 @@ def import_all_rows(
     # Resolve uploaded category names → EF names via column_config mapping
     category_resolver = _build_category_resolver(site_id, category_id)
 
+    # Multi-field categories (e.g. Use of Sold Products): multiply the chosen
+    # method's fields; rows that can't be computed are SKIPPED, never saved
+    # with a wrong or zero total.
+    calc_spec = _load_calculation_spec(site_id, category_id)
+
     conn = get_connection()
     inserted = 0
     skipped = 0
@@ -1495,6 +1571,7 @@ def import_all_rows(
             activity_data.pop(_DATE_FIELD, None)
 
             matched_ef: dict | None = None
+            row_error: str | None = None
             if factor_index and emission_category:
                 display_key = emission_category.strip().lower()
                 resolved = category_resolver.get(display_key)
@@ -1503,7 +1580,10 @@ def import_all_rows(
                 if matched_ef:
                     factor_value = float(matched_ef.get("factor_value") or 0)
                     denom_unit = matched_ef.get("denominator_unit")
-                    activity_value = _extract_activity_value(activity_data)
+                    if calc_spec:
+                        activity_value, row_error = _compute_spec_activity_value(calc_spec, activity_data)
+                    else:
+                        activity_value = _extract_activity_value(activity_data)
                     if activity_value <= 0:
                         total_emission = 0.0
                     elif units_match_exact(denom_unit, activity_unit):
@@ -1512,12 +1592,28 @@ def import_all_rows(
                         conv = get_conversion_factor(activity_unit or "", denom_unit or "")
                         if not conv:
                             total_emission = 0.0
+                            if calc_spec:
+                                row_error = f"No unit conversion from '{activity_unit}' to '{denom_unit}'"
                         else:
                             total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
                 else:
                     total_emission = 0.0
+                    if calc_spec:
+                        row_error = f"No emission factor found for '{emission_category}' (year {row_year})"
             else:
-                total_emission = _calc_emission(conn, site_id, category_id, activity_data, activity_unit, row_date)
+                if calc_spec:
+                    total_emission = 0.0
+                    row_error = "Missing emission category" if not emission_category else "No emission factors loaded"
+                else:
+                    total_emission = _calc_emission(conn, site_id, category_id, activity_data, activity_unit, row_date)
+
+            # Spec categories never save an uncomputable row — a zero or
+            # one-field total would look plausible and poison the reports.
+            # (Legacy categories keep their existing insert-with-zero behavior.)
+            if calc_spec and (row_error or total_emission <= 0):
+                logger.warning(f"Bulk import skipped a row (spec category): {row_error or 'computed total is 0'}")
+                skipped += 1
+                continue
 
             ef_snapshot = None
             if matched_ef:

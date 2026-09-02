@@ -372,12 +372,16 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # 1. Fetch the column_config row
+            # ORDER BY config_name mirrors the entry form and the Node backend,
+            # which both use configs[0] of the name-sorted list — all three
+            # engines must read one and the same config.
             cur.execute(
                 """
                 SELECT pk_id, config_name, column_options, column_dependencies,
-                       dependent_options, emission_category_mapping
+                       dependent_options, emission_category_mapping, calculation
                 FROM column_config
                 WHERE site_id = %s AND category_id = %s
+                ORDER BY config_name ASC
                 LIMIT 1
                 """,
                 (site_id, category_id),
@@ -390,7 +394,9 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
             config_id = config["pk_id"]
 
             # Parse JSONB fields that may come back as strings
-            for field in ("column_options", "column_dependencies", "dependent_options", "emission_category_mapping"):
+            # (calculation stays None when the column is null — callers treat
+            # None as "normal one-value category")
+            for field in ("column_options", "column_dependencies", "dependent_options", "emission_category_mapping", "calculation"):
                 val = config.get(field)
                 if isinstance(val, str):
                     try:
