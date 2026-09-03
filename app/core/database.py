@@ -372,12 +372,16 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # 1. Fetch the column_config row
+            # ORDER BY config_name mirrors the entry form and the Node backend,
+            # which both use configs[0] of the name-sorted list — all three
+            # engines must read one and the same config.
             cur.execute(
                 """
                 SELECT pk_id, config_name, column_options, column_dependencies,
-                       dependent_options, emission_category_mapping
+                       dependent_options, emission_category_mapping, calculation
                 FROM column_config
                 WHERE site_id = %s AND category_id = %s
+                ORDER BY config_name ASC
                 LIMIT 1
                 """,
                 (site_id, category_id),
@@ -390,7 +394,9 @@ def fetch_column_config(site_id: int, category_id: int) -> dict | None:
             config_id = config["pk_id"]
 
             # Parse JSONB fields that may come back as strings
-            for field in ("column_options", "column_dependencies", "dependent_options", "emission_category_mapping"):
+            # (calculation stays None when the column is null — callers treat
+            # None as "normal one-value category")
+            for field in ("column_options", "column_dependencies", "dependent_options", "emission_category_mapping", "calculation"):
                 val = config.get(field)
                 if isinstance(val, str):
                     try:
@@ -570,6 +576,33 @@ def update_uploaded_document(
     finally:
         release_connection(conn)
 
+
+def list_documents_for_cleanup(older_than_days: int = 7, limit: int = 500) -> list[dict]:
+    """
+    Documents whose stored file can be reclaimed: older than the cutoff and not
+    already cleaned up. The age cutoff is what keeps an in-progress upload
+    wizard from having its file pulled out from under it.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, document_name, cloudinary_url, cloudinary_public_id, status
+                FROM uploaded_documents
+                WHERE created_at < NOW() - (%s * INTERVAL '1 day')
+                  AND status <> 'deleted'
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                (older_than_days, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"DB list_documents_for_cleanup failed: {e}")
+        raise
+    finally:
+        release_connection(conn)
 
 
 def get_emission_factor(

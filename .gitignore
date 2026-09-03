@@ -19,3 +19,6 @@ plan.md
 # tests and locals
 /tests
 /test-results
+
+# Transient upload scratch space (never belongs in git)
+app/temp/
