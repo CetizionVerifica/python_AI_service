@@ -1166,17 +1166,10 @@ def get_preview_rows(
     df = _read_df_from_bytes(content, ext)
     mapped_df = map_df(df, mappings)
 
-    if "emission_category" in mapped_df.columns:
-        logger.info(
-        f"Excel emission categories: "
-        f"{mapped_df['emission_category'].dropna().unique().tolist()}"
-    )
-    else:
+    if "emission_category" not in mapped_df.columns:
         logger.warning(
-        f"'emission_category' column not found. "
-        f"Available columns: {mapped_df.columns.tolist()}"
-    )
-
+            f"'emission_category' column not found. Available columns: {mapped_df.columns.tolist()}"
+        )
 
     if selected_categories:
         selected = {c.strip() for c in selected_categories}
@@ -1207,7 +1200,6 @@ def get_preview_rows(
         # querying per row (N+1 → 1 query). All years are indexed so each row can
         # pick the factor matching its own reporting date.
         factor_index = _load_factor_index(conn, site_id, category_id)
-
 
         for _, r in page_df.iterrows():
             activity_data = r.to_dict()
@@ -1256,6 +1248,20 @@ def get_preview_rows(
                                     f"No unit conversion for '{activity_unit}' → '{denominator_unit}' "
                                     f"(category='{emission_category}')"
                                 )
+                                if calc_spec and not row_error:
+                                    row_error = (
+                                        f"No unit conversion from '{activity_unit}' to '{denominator_unit}'"
+                                    )
+                elif calc_spec:
+                    # Mirrors import_all_rows: these rows are skipped there, so
+                    # the preview has to say why rather than showing a bare 0.
+                    row_error = (
+                        "No emission factors loaded for this category"
+                        if not factor_index
+                        else f"No emission factor found for '{emission_category}' (year {row_year})"
+                    )
+            elif calc_spec:
+                row_error = "Missing emission category"
 
             row_out = dict(activity_data)
             row_out["global_category_name"] = global_category_name
@@ -1610,8 +1616,11 @@ def import_all_rows(
             # Spec categories never save an uncomputable row — a zero or
             # one-field total would look plausible and poison the reports.
             # (Legacy categories keep their existing insert-with-zero behavior.)
-            if calc_spec and (row_error or total_emission <= 0):
-                logger.warning(f"Bulk import skipped a row (spec category): {row_error or 'computed total is 0'}")
+            # Keyed on row_error, not on total_emission: every uncomputable path
+            # above sets one, while total_emission is already rounded to 2 dp, so
+            # testing it would also discard any legitimate row under 0.005 tCO2e.
+            if calc_spec and row_error:
+                logger.warning(f"Bulk import skipped a row (spec category): {row_error}")
                 skipped += 1
                 continue
 

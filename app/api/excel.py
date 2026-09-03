@@ -69,7 +69,7 @@ async def upload_excel(file: UploadFile = File(...)):
 
         if cloudinary_service.is_configured():
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 cloud = await loop.run_in_executor(
                     None,
                     lambda: cloudinary_service.upload_file(local_path, folder="excel-imports"),
@@ -90,14 +90,28 @@ async def upload_excel(file: UploadFile = File(...)):
                 "This document will not survive a restart or reach other instances."
             )
 
-        doc = insert_uploaded_document(
-            document_name=filename,
-            cloudinary_url=stored_url,
-            cloudinary_public_id=public_id,
-            public_url=stored_url,
-            file_type=file.content_type,
-            file_size=len(contents),
-        )
+        try:
+            doc = insert_uploaded_document(
+                document_name=filename,
+                cloudinary_url=stored_url,
+                cloudinary_public_id=public_id,
+                public_url=stored_url,
+                file_type=file.content_type,
+                file_size=len(contents),
+            )
+        except Exception:
+            # No row will ever point at the uploaded asset, and the cleanup job
+            # only walks uploaded_documents — drop it now or it leaks forever.
+            if public_id:
+                try:
+                    cloudinary_service.delete_file(public_id)
+                except Exception:
+                    logger.warning(
+                        f"Orphaned Cloudinary asset {public_id}: upload succeeded but the "
+                        "document row failed and the asset could not be deleted",
+                        exc_info=True,
+                    )
+            raise
         inserted = True
 
         return {"document_id": int(doc["id"]), "headers": headers}
@@ -138,14 +152,12 @@ def preview(payload: dict):
         document_id = int(payload.get("document_id"))
         mappings = payload.get("mappings") or {}
         selected_categories = payload.get("selected_categories") or []
-        # logger.info(f"selected_categories received: {selected_categories}")
         page = int(payload.get("page", 1))
         page_size = int(payload.get("page_size", 100))
 
         site_id = int(payload.get("site_id"))
         category_id = int(payload.get("category_id"))
         date_of_reporting = str(payload.get("date_of_reporting"))
-
 
         rows, total = get_preview_rows(
             document_id=document_id,
