@@ -19,7 +19,17 @@ from app.schemas.emission_factor import (
     CategorySuggestion,
     ColumnHeader,
 )
-from app.core.database import get_connection, release_connection, get_uploaded_document_by_id, fetch_emission_factor, bulk_insert_emissions_with_conn, fetch_column_config
+from app.core.database import (
+    get_connection,
+    release_connection,
+    get_uploaded_document_by_id,
+    update_uploaded_document,
+    list_documents_for_cleanup,
+    fetch_emission_factor,
+    bulk_insert_emissions_with_conn,
+    fetch_column_config,
+)
+from app.core import cloudinary_service
 
 logger = logging.getLogger(__name__)
 
@@ -716,6 +726,9 @@ def _cache_set(document_id: int, content: bytes, ext: str) -> None:
         _file_cache.pop(k, None)
     _file_cache[document_id] = (content, ext, now)
 
+def _cache_delete(document_id: int) -> None:
+    _file_cache.pop(document_id, None)
+
 
 UNIT_CONVERSIONS = {
     "litre": {"gallon": 0.264172, "ml": 1000, "cubic meter": 0.001, "kilo litre": 0.001, "kl": 0.001},
@@ -919,6 +932,23 @@ def map_df(df: pd.DataFrame, mappings: dict[str, str]) -> pd.DataFrame:
         raise ValueError("No valid column mappings found.")
     return pd.DataFrame(mapped).fillna("")
 
+def _resolve_ext(document_name: str | None, location: str) -> str:
+    """
+    Work out which spreadsheet reader to use for a stored document.
+
+    The original filename is checked first: a Cloudinary raw URL does not
+    reliably carry a usable extension, and silently defaulting to xlsx would
+    mis-parse a CSV.
+    """
+    for candidate in (document_name, location.split("?")[0]):
+        if not candidate or "." not in candidate:
+            continue
+        ext = candidate.rsplit(".", 1)[-1].strip().lower()
+        if ext in {"csv", "xls", "xlsx"}:
+            return ext
+    return "xlsx"
+
+
 def download_document_bytes(document_id: int) -> tuple[bytes, str]:
     # Check in-memory cache first (avoids re-reading on each step)
     cached = _cache_get(document_id)
@@ -929,39 +959,42 @@ def download_document_bytes(document_id: int) -> tuple[bytes, str]:
     if not doc:
         raise ValueError("Invalid document_id")
 
-    file_path = doc["cloudinary_url"]  # now stores local path
+    # The file is deleted the moment an import commits, so a request for an
+    # already-consumed document is expected rather than exceptional. Check the
+    # status first: Cloudinary's CDN can keep serving a deleted asset for a
+    # while, and reading it back after import would be silently inconsistent.
+    if (doc.get("status") or "") in CONSUMED_STATUSES:
+        raise ValueError(
+            "This file has already been imported and is no longer stored. "
+            "Please re-upload it to import again."
+        )
 
-    # local file path
+    file_path = doc["cloudinary_url"]
+    ext = _resolve_ext(doc.get("document_name"), file_path)
+
+    # Shared storage (Cloudinary). This is the normal path: any instance can
+    # fetch it, and it survives restarts. The bytes are cached below so paging
+    # through the preview does not re-download the file each time.
+    if file_path.startswith(("http://", "https://")):
+        try:
+            r = requests.get(file_path, timeout=60)
+            r.raise_for_status()
+        except Exception as e:
+            raise ValueError(f"Failed to read file: {e}")
+
+        _cache_set(document_id, r.content, ext)
+        return r.content, ext
+
+    # Legacy rows still point at a container-local path.
     if os.path.isfile(file_path):
         with open(file_path, "rb") as f:
             content = f.read()
-        ext = file_path.rsplit(".", 1)[-1].lower()
-        if ext not in {"csv", "xls", "xlsx"}:
-            ext = "xlsx"
         _cache_set(document_id, content, ext)
         return content, ext
 
-    # If the path looks like a local filesystem path (no URL scheme),
-    # the temp file was deleted — don't attempt requests.get() on it.
-    if not file_path.startswith(("http://", "https://")):
-        raise ValueError(
-            f"Temp file no longer exists at '{file_path}'. Please re-upload the file."
-        )
-
-    # fallback: legacy Cloudinary URL
-    try:
-        r = requests.get(file_path, timeout=60)
-        r.raise_for_status()
-    except Exception as e:
-        raise ValueError(f"Failed to read file: {e}")
-
-    filename = file_path.split("?")[0].lower()
-    ext = filename.rsplit(".", 1)[-1].lower()
-    if ext not in {"csv", "xls", "xlsx"}:
-        ext = "xlsx"
-
-    _cache_set(document_id, r.content, ext)
-    return r.content, ext
+    raise ValueError(
+        f"Temp file no longer exists at '{file_path}'. Please re-upload the file."
+    )
 
 def _build_category_resolver(site_id: int, category_id: int) -> dict[str, str]:
     """
@@ -1138,6 +1171,11 @@ def get_preview_rows(
     df = _read_df_from_bytes(content, ext)
     mapped_df = map_df(df, mappings)
 
+    if "emission_category" not in mapped_df.columns:
+        logger.warning(
+            f"'emission_category' column not found. Available columns: {mapped_df.columns.tolist()}"
+        )
+
     if selected_categories:
         selected = {c.strip() for c in selected_categories}
         if "emission_category" in mapped_df.columns:
@@ -1167,12 +1205,6 @@ def get_preview_rows(
         # querying per row (N+1 → 1 query). All years are indexed so each row can
         # pick the factor matching its own reporting date.
         factor_index = _load_factor_index(conn, site_id, category_id)
-
-        logger.info(
-            f"Preview EF lookup: site_id={site_id}, category_id={category_id}, "
-            f"default_year={default_year}, ef_names={list(factor_index.keys())}, "
-            f"category_resolver_keys={list(category_resolver.keys())}"
-        )
 
         for _, r in page_df.iterrows():
             activity_data = r.to_dict()
@@ -1225,6 +1257,20 @@ def get_preview_rows(
                                     f"No unit conversion for '{activity_unit}' → '{denominator_unit}' "
                                     f"(category='{emission_category}')"
                                 )
+                                if calc_spec and not row_error:
+                                    row_error = (
+                                        f"No unit conversion from '{activity_unit}' to '{denominator_unit}'"
+                                    )
+                elif calc_spec:
+                    # Mirrors import_all_rows: these rows are skipped there, so
+                    # the preview has to say why rather than showing a bare 0.
+                    row_error = (
+                        "No emission factors loaded for this category"
+                        if not factor_index
+                        else f"No emission factor found for '{emission_category}' (year {row_year})"
+                    )
+            elif calc_spec:
+                row_error = "Missing emission category"
 
             row_out = dict(activity_data)
             row_out["global_category_name"] = global_category_name
@@ -1440,6 +1486,61 @@ def _calc_emission(conn, site_id: int, category_id: int, activity_data: dict, ac
     return round((converted * factor_value) / 1000.0, 2)
 
 
+# Statuses that mean the stored file is gone on purpose. download_document_bytes
+# uses these to explain *why* a document can no longer be read.
+CONSUMED_STATUSES = {"imported", "deleted"}
+
+
+def delete_document_file(document_id: int, new_status: str = "deleted") -> None:
+    """
+    Permanently remove a document's stored file (Cloudinary asset or legacy
+    local temp file) and drop it from the in-memory cache.
+
+    Called as soon as an import commits: the rows are in the database, so the
+    spreadsheet has served its purpose. A retry means re-uploading the file.
+    """
+    try:
+        doc = get_uploaded_document_by_id(document_id)
+        if not doc:
+            return
+
+        public_id = doc.get("cloudinary_public_id")
+        file_path = doc.get("cloudinary_url") or ""
+
+        if public_id:
+            cloudinary_service.delete_file(public_id)
+            logger.info(f"Deleted Cloudinary asset for document_id={document_id}: {public_id}")
+        elif file_path and os.path.isfile(file_path):
+            os.remove(file_path)
+            logger.info(f"Deleted temp file for document_id={document_id}: {file_path}")
+
+        update_uploaded_document(document_id, status=new_status)
+    except Exception as e:
+        logger.warning(f"Failed to delete stored file for document_id={document_id}: {e}")
+    finally:
+        _cache_delete(document_id)
+
+
+def cleanup_old_documents(older_than_days: int = 7, limit: int = 500) -> int:
+    """
+    Reclaim storage for *abandoned* uploads — files whose wizard was started but
+    never imported, so nothing ever deleted them. Imported documents clean
+    themselves up the moment their rows commit.
+
+    Optional; nothing calls it. Returns the number of documents cleaned up.
+    """
+    try:
+        docs = list_documents_for_cleanup(older_than_days=older_than_days, limit=limit)
+    except Exception as e:
+        logger.error(f"cleanup_old_documents: failed to list documents: {e}")
+        return 0
+
+    for doc in docs:
+        delete_document_file(int(doc["id"]))
+
+    logger.info(f"cleanup_old_documents: processed {len(docs)} document(s)")
+    return len(docs)
+
 def import_all_rows(
     document_id: int,
     mappings: dict[str, str],
@@ -1561,8 +1662,11 @@ def import_all_rows(
             # Spec categories never save an uncomputable row — a zero or
             # one-field total would look plausible and poison the reports.
             # (Legacy categories keep their existing insert-with-zero behavior.)
-            if calc_spec and (row_error or total_emission <= 0):
-                logger.warning(f"Bulk import skipped a row (spec category): {row_error or 'computed total is 0'}")
+            # Keyed on row_error, not on total_emission: every uncomputable path
+            # above sets one, while total_emission is already rounded to 2 dp, so
+            # testing it would also discard any legitimate row under 0.005 tCO2e.
+            if calc_spec and row_error:
+                logger.warning(f"Bulk import skipped a row (spec category): {row_error}")
                 skipped += 1
                 continue
 
@@ -1652,6 +1756,10 @@ def import_all_rows(
             inserted += bulk_insert_emissions_with_conn(conn, fera_rows_buffer)
 
         conn.commit()
+        # Rows are committed, so the spreadsheet is no longer needed. Removing it
+        # here — rather than on a schedule — keeps nothing in storage that the
+        # database does not already hold.
+        delete_document_file(document_id, new_status="imported")
         return {"inserted": inserted, "skipped": skipped, "total_rows": total_rows, "upload_batch_id": upload_batch_id if inserted > 0 else None}
 
     except Exception:

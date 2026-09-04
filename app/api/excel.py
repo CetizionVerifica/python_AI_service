@@ -1,7 +1,7 @@
 
+import asyncio
 import logging
 import uuid
-import os
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from app.services.excel_parser import (
@@ -10,7 +10,9 @@ from app.services.excel_parser import (
     import_all_rows,
     read_headers_from_bytes,
 )
-from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document, get_uploaded_document_by_id
+from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document
+from app.core import cloudinary_service
+from app.services import storage
 from app.core.config import settings
 
 import pandas as pd
@@ -31,6 +33,10 @@ async def upload_excel(file: UploadFile = File(...)):
     if ext not in allowed:
         raise HTTPException(status_code=400, detail="Only .xlsx, .xls, .csv files are allowed.")
 
+    local_path = None
+    uploaded_to_cloud = False
+    inserted = False
+
     try:
         contents = await file.read()
 
@@ -46,29 +52,83 @@ async def upload_excel(file: UploadFile = File(...)):
         if not headers:
             raise ValueError("The uploaded file appears to be empty or has no columns.")
 
-        # save to temp for processing
+        # Write the bytes locally only so Cloudinary's chunked uploader can
+        # stream them. This copy is transient: it is removed in the `finally`
+        # below and nothing after this request may depend on it.
         file_id = str(uuid.uuid4())
-        local_filename = f"{file_id}.{ext}"
-        local_path = Path(settings.TEMP_DIR) / local_filename
+        local_path = Path(settings.TEMP_DIR) / f"{file_id}.{ext}"
         with open(local_path, "wb") as f:
             f.write(contents)
 
-        doc = insert_uploaded_document(
-            document_name=filename,
-            cloudinary_url=str(local_path),
-            cloudinary_public_id=None,
-            public_url=str(local_path),
-            file_type=file.content_type,
-            file_size=len(contents),
-        )
+        # The remaining wizard steps (unique-categories / preview / import) each
+        # re-read this document, possibly minutes later and possibly on another
+        # replica. Container-local disk is neither shared nor durable, so hand
+        # the file to shared storage and record that location instead.
+        stored_url = str(local_path)
+        public_id = None
+
+        if cloudinary_service.is_configured():
+            try:
+                loop = asyncio.get_running_loop()
+                cloud = await loop.run_in_executor(
+                    None,
+                    lambda: cloudinary_service.upload_file(local_path, folder="excel-imports"),
+                )
+                stored_url = cloud["secure_url"]
+                public_id = cloud["public_id"]
+                uploaded_to_cloud = True
+            except Exception:
+                # Degrade to the previous instance-local behaviour rather than
+                # rejecting the upload outright.
+                logger.warning(
+                    f"Cloudinary upload failed for {filename}; storing local temp path instead",
+                    exc_info=True,
+                )
+        else:
+            logger.warning(
+                "Cloudinary is not configured; storing local temp path. "
+                "This document will not survive a restart or reach other instances."
+            )
+
+        try:
+            doc = insert_uploaded_document(
+                document_name=filename,
+                cloudinary_url=stored_url,
+                cloudinary_public_id=public_id,
+                public_url=stored_url,
+                file_type=file.content_type,
+                file_size=len(contents),
+            )
+        except Exception:
+            # No row will ever point at the uploaded asset, and the cleanup job
+            # only walks uploaded_documents — drop it now or it leaks forever.
+            if public_id:
+                try:
+                    cloudinary_service.delete_file(public_id)
+                except Exception:
+                    logger.warning(
+                        f"Orphaned Cloudinary asset {public_id}: upload succeeded but the "
+                        "document row failed and the asset could not be deleted",
+                        exc_info=True,
+                    )
+            raise
+        inserted = True
 
         return {"document_id": int(doc["id"]), "headers": headers}
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"excel upload failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to process file.")
+    finally:
+        # Drop the local copy once shared storage holds it, or when no document
+        # row ended up pointing at it. On the fallback path the row *is* the
+        # only reference, so the file has to stay.
+        if local_path is not None and (uploaded_to_cloud or not inserted):
+            storage.cleanup(local_path)
 
 # ---- Step 2: unique categories BEFORE preview ----
 @router.post("/unique-categories")
@@ -144,17 +204,7 @@ def bulk_import(payload: dict):
             user_id=user_id,
         )
 
-        # cleanup temp file after import
-        try:
-            doc = get_uploaded_document_by_id(document_id)
-            if doc:
-                file_path = doc.get("cloudinary_url", "")
-                if file_path and os.path.isfile(file_path):
-                    os.remove(file_path)
-                    logger.info(f"Cleaned up temp file: {file_path}")
-        except Exception:
-            logger.warning(f"Failed to cleanup temp file for document {document_id}", exc_info=True)
-
+        # import_all_rows deletes the stored file as soon as the rows commit.
         return res
     except HTTPException:
         raise

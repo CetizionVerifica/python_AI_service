@@ -602,6 +602,33 @@ def update_uploaded_document(
         release_connection(conn)
 
 
+def list_documents_for_cleanup(older_than_days: int = 7, limit: int = 500) -> list[dict]:
+    """
+    Documents whose stored file can be reclaimed: older than the cutoff and not
+    already cleaned up. The age cutoff is what keeps an in-progress upload
+    wizard from having its file pulled out from under it.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, document_name, cloudinary_url, cloudinary_public_id, status
+                FROM uploaded_documents
+                WHERE created_at < NOW() - (%s * INTERVAL '1 day')
+                  AND status <> 'deleted'
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                (older_than_days, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"DB list_documents_for_cleanup failed: {e}")
+        raise
+    finally:
+        release_connection(conn)
+
 
 def get_emission_factor(
     site_id: int,

@@ -15,6 +15,19 @@ cloudinary.config(
 )
 
 
+def is_configured() -> bool:
+    """
+    True when credentials are present. Callers use this to fall back to local
+    storage (dev machines, or a deploy with the vars unset) instead of failing
+    the request outright.
+    """
+    return bool(
+        settings.CLOUDINARY_CLOUD_NAME
+        and settings.CLOUDINARY_API_KEY
+        and settings.CLOUDINARY_API_SECRET
+    )
+
+
 def upload_file(file_path: Path, folder: str = "invoices") -> dict:
     """
     Upload a file to Cloudinary and return the result.
