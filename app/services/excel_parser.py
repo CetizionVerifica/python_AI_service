@@ -745,6 +745,11 @@ UNIT_CONVERSIONS = {
     "tonne": {"kg": 1000, "lb": 2204.62, "g": 1000000},
     "g": {"kg": 0.001, "lb": 0.00220462},
 
+    # Freight (weight-distance) — mirrors the Node backend's table
+    "tonne.km": {"kg.km": 1000, "g.km": 1000000},
+    "kg.km": {"tonne.km": 0.001, "g.km": 1000},
+    "g.km": {"tonne.km": 0.000001, "kg.km": 0.001},
+
     # Energy
     "kwh": {"mwh": 0.001, "gj": 0.0036, "mj": 3.6},
     "mwh": {"kwh": 1000, "gj": 3.6, "mj": 3600},
@@ -1233,7 +1238,9 @@ def get_preview_rows(
                     factor_value = float(ef_row["factor_value"])
                     denominator_unit = ef_row.get("denominator_unit")
                     if calc_spec:
-                        activity_value, row_error = _compute_spec_activity_value(calc_spec, activity_data)
+                        activity_value, row_error = _compute_spec_activity_value(calc_spec, activity_data, activity_unit)
+                        if row_error is None and calc_spec.get("mode") == "per_unit":
+                            activity_unit = _normalize_unit_key(activity_unit)  # canonical spelling
                     else:
                         activity_value = _extract_activity_value(activity_data)
                     if activity_value > 0:
@@ -1244,6 +1251,8 @@ def get_preview_rows(
                             if conv:
                                 total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
                             else:
+                                if calc_spec:
+                                    row_error = f"No unit conversion from '{activity_unit}' to '{denominator_unit}'"
                                 logger.warning(
                                     f"No unit conversion for '{activity_unit}' → '{denominator_unit}' "
                                     f"(category='{emission_category}')"
@@ -1294,31 +1303,63 @@ def _load_calculation_spec(site_id: int, category_id: int) -> dict | None:
         logger.warning(f"Failed to load calculation spec for site={site_id}, category={category_id}: {e}")
         return None
     spec = (config or {}).get("calculation")
-    if (
-        isinstance(spec, dict)
-        and spec.get("mode") == "per_method"
-        and spec.get("method_column")
-        and isinstance(spec.get("methods"), dict)
-    ):
+    if not isinstance(spec, dict) or not isinstance(spec.get("methods"), dict):
+        return None
+    if spec.get("mode") == "per_method" and spec.get("method_column"):
+        return spec
+    if spec.get("mode") == "per_unit":
         return spec
     return None
 
 
-def _compute_spec_activity_value(spec: dict, activity_data: dict) -> tuple[float, str | None]:
+def _normalize_unit_key(unit) -> str:
+    """"tonne.km", "Tonne KM", "tonne-km", "tkm" -> "tonne.km" (mirrors Node)."""
+    u = re.sub(r"[\s_\-]+", ".", str(unit or "").strip().lower())
+    if u in ("tkm", "t.km", "tonnes.km", "tonne.kms"):
+        u = "tonne.km"
+    if u == "kms":
+        u = "km"
+    return u
+
+
+def _compute_spec_activity_value(spec: dict, activity_data: dict, activity_unit: str | None = None) -> tuple[float, str | None]:
     """
     Returns (product, error). Every field of the chosen method must be a
     number > 0 (percent fields are 0-100 and divided by 100); anything else
     is an error — a partial product would be a plausible-looking wrong total,
     so spec rows never fall back to the one-value heuristic.
+    per_method: the method dropdown picks the fields. per_unit: the row's unit
+    does (transport: tonne.km = Weight x Distance, km = Distance alone).
+    Legacy per_unit rows (only the product stored) are recognised when the
+    other multiply fields are ABSENT from the row entirely.
     """
-    method_value = activity_data.get(spec["method_column"])
-    method_key = str(method_value).strip() if method_value is not None else ""
-    if not method_key or method_key.lower() == "nan":
-        return 0.0, f'Missing "{spec["method_column"]}"'
+    if spec.get("mode") == "per_unit":
+        method_key = _normalize_unit_key(activity_unit)
+        if not method_key:
+            return 0.0, "Missing activity unit"
+        method = spec["methods"].get(method_key)
+        if not method or not method.get("multiply"):
+            return 0.0, f'Unit "{activity_unit}" is not configured for this category'
+    else:
+        method_value = activity_data.get(spec["method_column"])
+        method_key = str(method_value).strip() if method_value is not None else ""
+        if not method_key or method_key.lower() == "nan":
+            return 0.0, f'Missing "{spec["method_column"]}"'
+        method = spec["methods"].get(method_key)
+        if not method or not method.get("multiply"):
+            return 0.0, f'Unknown {spec["method_column"]} "{method_key}"'
 
-    method = spec["methods"].get(method_key)
-    if not method or not method.get("multiply"):
-        return 0.0, f'Unknown {spec["method_column"]} "{method_key}"'
+    legacy = spec.get("legacy_field")
+    if legacy and legacy in method["multiply"]:
+        others = [f for f in method["multiply"] if f != legacy]
+        if others and all(f not in activity_data for f in others):
+            try:
+                num = float(str(activity_data.get(legacy)).replace(",", "").strip())
+            except Exception:
+                num = float("nan")
+            if not (num > 0):
+                return 0.0, f'Missing or invalid "{legacy}"'
+            return num, None
 
     percent_fields = set(method.get("percent") or [])
     product = 1.0
@@ -1587,7 +1628,12 @@ def import_all_rows(
                     factor_value = float(matched_ef.get("factor_value") or 0)
                     denom_unit = matched_ef.get("denominator_unit")
                     if calc_spec:
-                        activity_value, row_error = _compute_spec_activity_value(calc_spec, activity_data)
+                        activity_value, row_error = _compute_spec_activity_value(calc_spec, activity_data, activity_unit)
+                        if row_error is None:
+                            if calc_spec.get("mode") == "per_unit":
+                                activity_unit = _normalize_unit_key(activity_unit)  # canonical spelling, stored as such
+                            # Same as the Node backend: persist the computed product next to the inputs.
+                            activity_data["activity_value"] = str(activity_value)
                     else:
                         activity_value = _extract_activity_value(activity_data)
                     if activity_value <= 0:

@@ -33,13 +33,38 @@ def _get_pool() -> _pg_pool.ThreadedConnectionPool:
 
 
 def get_connection():
-    """Get a database connection from the pool."""
-    return _get_pool().getconn()
+    """Get a live database connection from the pool.
+
+    Pooled connections can die underneath us (Postgres restart, an admin
+    terminating sessions, idle timeouts). Handing such a connection out makes
+    every request fail with "connection already closed" until the service is
+    restarted, so probe each connection and replace dead ones.
+    """
+    pool = _get_pool()
+    for _ in range(pool.maxconn + 1):
+        conn = pool.getconn()
+        if conn.closed:
+            pool.putconn(conn, close=True)
+            continue
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            conn.rollback()
+            return conn
+        except Exception:
+            try:
+                pool.putconn(conn, close=True)
+            except Exception:
+                pass
+    return pool.getconn()
 
 
 def release_connection(conn):
     """Return a connection to the pool instead of closing it."""
     try:
+        if conn.closed:
+            _get_pool().putconn(conn, close=True)
+            return
         # Always rollback any open transaction before returning to pool.
         # This ensures the next user of this connection gets a clean state.
         # (Calling rollback after commit is harmless — it's a no-op.)
