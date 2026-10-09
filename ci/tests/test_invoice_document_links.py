@@ -76,3 +76,62 @@ def test_invoice_file_kept_while_linked(throwaway_db, monkeypatch):
         assert cur.fetchone()[0] == 0
         cur.execute("SELECT count(*) FROM emission_document WHERE ai_invoice_id IS NOT NULL")
         assert cur.fetchone()[0] == 2  # evidence rows untouched
+
+
+def test_delete_waits_for_a_link_in_progress(throwaway_db, monkeypatch):
+    """A link added while the delete runs is seen: the delete locks the
+    invoice row and checks links in the same transaction, and ESG-lite holds
+    the row FOR SHARE while it links."""
+    import os
+    import threading
+
+    import psycopg2
+
+    from app.api import invoices
+    from app.core import cloudinary_service
+
+    with throwaway_db.cursor() as cur:
+        cur.execute(INVOICE_TABLE)
+        cur.execute(
+            "INSERT INTO invoice (file_name, cloudinary_url, cloudinary_public_id)"
+            " VALUES ('racing.pdf', 'u5', 'invoices/racing') RETURNING invoice_id"
+        )
+        invoice_id = cur.fetchone()[0]
+
+    destroyed = []
+    monkeypatch.setattr(cloudinary_service, "delete_file", lambda public_id: destroyed.append(public_id))
+
+    linker = psycopg2.connect(
+        host=os.environ["DB_HOST"],
+        port=int(os.environ.get("DB_PORT", "5432")),
+        user=os.environ.get("DB_USERNAME", "postgres"),
+        password=os.environ.get("DB_PASSWORD", ""),
+        dbname=os.environ["DB_NAME"],
+    )
+    try:
+        with linker.cursor() as cur:
+            # What ESG-lite's POST /user/documents/from-invoice does.
+            cur.execute("SELECT invoice_id FROM invoice WHERE invoice_id = %s FOR SHARE", (invoice_id,))
+            cur.execute(
+                """
+                INSERT INTO emission_document
+                  (file_name, original_name, cloudinary_public_id, cloudinary_url, file_type, document_type, ai_invoice_id)
+                VALUES ('f', 'f', 'invoices/racing', 'u5', 'application/pdf', 'invoice', %s)
+                """,
+                (invoice_id,),
+            )
+
+        result = {}
+        worker = threading.Thread(target=lambda: result.update(asyncio.run(invoices.delete_invoice(invoice_id))))
+        worker.start()
+        worker.join(timeout=1.5)
+        assert worker.is_alive(), "delete must wait for the link transaction"
+        linker.commit()
+        worker.join(timeout=10)
+        assert not worker.is_alive()
+    finally:
+        linker.rollback()
+        linker.close()
+
+    assert result["file_kept"] is True
+    assert destroyed == []
