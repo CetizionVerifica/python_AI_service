@@ -217,6 +217,37 @@ def bulk_delete_invoices(invoice_ids: list[int]) -> list[dict]:
         release_connection(conn)
 
 
+def invoice_ids_with_documents(invoice_ids: list[int]) -> set[int]:
+    """Invoice ids that ESG-lite evidence documents still point at.
+
+    ESG-lite's POST /user/documents/from-invoice attaches an invoice's
+    Cloudinary file to emission entries (emission_document.ai_invoice_id),
+    so those files must outlive the invoice row. Returns an empty set when
+    the column does not exist yet (ESG-lite migrate:document-ai-invoice not
+    run), which keeps today's behaviour.
+    """
+    if not invoice_ids:
+        return set()
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'emission_document' AND column_name = 'ai_invoice_id'
+                """
+            )
+            if cur.fetchone() is None:
+                return set()
+            cur.execute(
+                "SELECT DISTINCT ai_invoice_id FROM emission_document WHERE ai_invoice_id = ANY(%s)",
+                (list(invoice_ids),),
+            )
+            return {row[0] for row in cur.fetchall()}
+    finally:
+        release_connection(conn)
+
+
 # ---------------------------------------------------------------------------
 # Emission Factor Uploads table
 # ---------------------------------------------------------------------------
