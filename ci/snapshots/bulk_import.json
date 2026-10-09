@@ -1,0 +1,339 @@
+{
+  "imports": [
+    {
+      "inserted": 9,
+      "name": "stationary combustion with per-row dates and FERA",
+      "skipped": 0,
+      "total_rows": 6
+    },
+    {
+      "inserted": 2,
+      "name": "use of sold products (per-method spec), bad rows skipped",
+      "skipped": 3,
+      "total_rows": 5
+    },
+    {
+      "inserted": 2,
+      "name": "transport (per-unit spec)",
+      "skipped": 1,
+      "total_rows": 3
+    }
+  ],
+  "stored_emissions": [
+    {
+      "activity_data": {
+        "activity_data_unit": "litre",
+        "activity_value": "1000",
+        "emission_category": "Diesel"
+      },
+      "activity_data_unit": "litre",
+      "category_id": 1,
+      "date": "2025-01-15",
+      "factor": {
+        "denominator_unit": "litre",
+        "emission_category_name": "Diesel",
+        "emission_factor_id": 1,
+        "factor_value": 2680.0,
+        "global_category_name": "Diesel",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "2680.0",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "activity_data_unit": "gallon",
+        "activity_value": "500",
+        "emission_category": "Diesel"
+      },
+      "activity_data_unit": "gallon",
+      "category_id": 1,
+      "date": "2025-02-15",
+      "factor": {
+        "denominator_unit": "litre",
+        "emission_category_name": "Diesel",
+        "emission_factor_id": 1,
+        "factor_value": 2680.0,
+        "global_category_name": "Diesel",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "5072.45",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "activity_data_unit": "mwh",
+        "activity_value": "12.5",
+        "emission_category": "Natural Gas"
+      },
+      "activity_data_unit": "mwh",
+      "category_id": 1,
+      "date": "2025-03-15",
+      "factor": {
+        "denominator_unit": "kwh",
+        "emission_category_name": "Natural Gas",
+        "emission_factor_id": 2,
+        "factor_value": 183.0,
+        "global_category_name": "Natural Gas",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "2287.5",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "activity_data_unit": "litre",
+        "activity_value": "2200",
+        "emission_category": "diesel "
+      },
+      "activity_data_unit": "litre",
+      "category_id": 1,
+      "date": "2026-10-01",
+      "factor": {
+        "denominator_unit": "litre",
+        "emission_category_name": "Diesel",
+        "emission_factor_id": 1,
+        "factor_value": 2680.0,
+        "global_category_name": "Diesel",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "5896.0",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "activity_data_unit": "litre",
+        "activity_value": "10",
+        "emission_category": "Unobtainium"
+      },
+      "activity_data_unit": "litre",
+      "category_id": 1,
+      "date": "2025-04-15",
+      "factor": null,
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "0.0",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "activity_data_unit": "kg",
+        "activity_value": "10",
+        "emission_category": "Diesel"
+      },
+      "activity_data_unit": "kg",
+      "category_id": 1,
+      "date": "2025-05-15",
+      "factor": {
+        "denominator_unit": "litre",
+        "emission_category_name": "Diesel",
+        "emission_factor_id": 1,
+        "factor_value": 2680.0,
+        "global_category_name": "Diesel",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "0.0",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "_auto_fera": true,
+        "_source_category_id": 1,
+        "activity_data_unit": "litre",
+        "activity_value": "1000",
+        "emission_category": "Diesel"
+      },
+      "activity_data_unit": "litre",
+      "category_id": 28,
+      "date": "2025-01-15",
+      "factor": {
+        "denominator_unit": "litre",
+        "emission_category_name": "Diesel",
+        "emission_factor_id": 101,
+        "factor_value": 610.0,
+        "global_category_name": null,
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "610.0",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "_auto_fera": true,
+        "_source_category_id": 1,
+        "activity_data_unit": "gallon",
+        "activity_value": "500",
+        "emission_category": "Diesel"
+      },
+      "activity_data_unit": "gallon",
+      "category_id": 28,
+      "date": "2025-02-15",
+      "factor": {
+        "denominator_unit": "litre",
+        "emission_category_name": "Diesel",
+        "emission_factor_id": 101,
+        "factor_value": 610.0,
+        "global_category_name": null,
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "1154.55",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "_auto_fera": true,
+        "_source_category_id": 1,
+        "activity_data_unit": "litre",
+        "activity_value": "2200",
+        "emission_category": "diesel "
+      },
+      "activity_data_unit": "litre",
+      "category_id": 28,
+      "date": "2026-10-01",
+      "factor": {
+        "denominator_unit": "litre",
+        "emission_category_name": "Diesel",
+        "emission_factor_id": 101,
+        "factor_value": 610.0,
+        "global_category_name": null,
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "1342.0",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "Calculation Method": "Direct energy",
+        "Energy per use": "0.75",
+        "Lifetime uses": "3650",
+        "Product Name": "Fan X1",
+        "Share in use": "",
+        "Units Sold": "1,200",
+        "activity_data_unit": "kwh",
+        "activity_value": "3285000.0",
+        "emission_category": "India Grid"
+      },
+      "activity_data_unit": "kwh",
+      "category_id": 3,
+      "date": "2025-06-30",
+      "factor": {
+        "denominator_unit": "kwh",
+        "emission_category_name": "India Grid",
+        "emission_factor_id": 5,
+        "factor_value": 0.233,
+        "global_category_name": "India Grid",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "765.4",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "Calculation Method": "Share of energy",
+        "Energy per use": "2.5",
+        "Lifetime uses": "",
+        "Product Name": "Fan X2",
+        "Share in use": "40",
+        "Units Sold": "800",
+        "activity_data_unit": "kwh",
+        "activity_value": "800.0",
+        "emission_category": "India Grid"
+      },
+      "activity_data_unit": "kwh",
+      "category_id": 3,
+      "date": "2025-06-30",
+      "factor": {
+        "denominator_unit": "kwh",
+        "emission_category_name": "India Grid",
+        "emission_factor_id": 5,
+        "factor_value": 0.233,
+        "global_category_name": "India Grid",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "0.19",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "Distance travelled": "640",
+        "Shipment Ref": "S-1",
+        "Weight": "22.5",
+        "activity_data_unit": "Tonne KM",
+        "activity_value": "14400.0",
+        "emission_category": "HGV Diesel [tonne.km]"
+      },
+      "activity_data_unit": "tonne.km",
+      "category_id": 4,
+      "date": "2025-06-30",
+      "factor": {
+        "denominator_unit": "tonne.km",
+        "emission_category_name": "HGV Diesel [tonne.km]",
+        "emission_factor_id": 6,
+        "factor_value": 105.4,
+        "global_category_name": "HGV Diesel [tonne.km]",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "1517.76",
+      "unit": "tCO2e"
+    },
+    {
+      "activity_data": {
+        "Distance travelled": "1180",
+        "Shipment Ref": "S-2",
+        "Weight": "",
+        "activity_data_unit": "km",
+        "activity_value": "1180.0",
+        "emission_category": "Van Diesel [km]"
+      },
+      "activity_data_unit": "km",
+      "category_id": 4,
+      "date": "2025-06-30",
+      "factor": {
+        "denominator_unit": "km",
+        "emission_category_name": "Van Diesel [km]",
+        "emission_factor_id": 7,
+        "factor_value": 250.12,
+        "global_category_name": "Van Diesel [km]",
+        "source": "CI",
+        "year": 2024
+      },
+      "site_id": 1,
+      "status": "pending",
+      "total_emission": "295.14",
+      "unit": "tCO2e"
+    }
+  ]
+}

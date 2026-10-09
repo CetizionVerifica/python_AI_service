@@ -1,0 +1,64 @@
+[
+  {
+    "checks": [
+      {
+        "check": "subtotal_plus_tax_equals_total",
+        "delta": 0.0,
+        "expected": 1180.0,
+        "ok": true,
+        "subtotal": 1000.0,
+        "tax": 180.0,
+        "total": 1180.0
+      }
+    ],
+    "input": {
+      "subtotal": "1,000.00",
+      "tax_amount": "180.00",
+      "total_amount": "1,180.00"
+    }
+  },
+  {
+    "checks": [
+      {
+        "check": "subtotal_plus_tax_equals_total",
+        "delta": 162.0,
+        "expected": 280.0,
+        "ok": false,
+        "subtotal": 100.0,
+        "tax": 180.0,
+        "total": 118.0
+      }
+    ],
+    "input": {
+      "subtotal": "1000",
+      "tax_amount": "180",
+      "total_amount": "1180.05"
+    }
+  },
+  {
+    "checks": [
+      {
+        "check": "subtotal_plus_tax_equals_total",
+        "delta": 157.0,
+        "expected": 452.0,
+        "ok": false,
+        "subtotal": 2.0,
+        "tax": 450.0,
+        "total": 295.0
+      }
+    ],
+    "input": {
+      "subtotal": "₹ 2,50,000.50",
+      "tax_amount": "45000.09",
+      "total_amount": "295000.59"
+    }
+  },
+  {
+    "checks": [],
+    "input": {
+      "subtotal": null,
+      "tax_amount": "1",
+      "total_amount": "1"
+    }
+  }
+]
