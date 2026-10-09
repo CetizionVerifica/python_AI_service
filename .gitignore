@@ -22,3 +22,6 @@ plan.md
 
 # Transient upload scratch space (never belongs in git)
 app/temp/
+
+# CI snapshot diffs
+*.actual.json
