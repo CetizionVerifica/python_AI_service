@@ -1,5 +1,5 @@
 -- ESG-lite database schema as the Node backend's TypeORM entities define it
--- (redesign/integration, 0371455). This service reads and writes those
+-- (redesign/integration + B1, B2, B8 from ESG-lite PRs #50, #51, #56). This service reads and writes those
 -- tables, so CI runs its SQL against this copy. Regenerate after an ESG-lite schema change:
 --   pg_dump --schema-only --no-owner --no-privileges <ci database built by ESG-lite ci/schema-sync.cjs>
 CREATE TYPE public.emission_document_document_type_enum AS ENUM (
@@ -46,6 +46,10 @@ CREATE TABLE public.brand (
     cover_to character varying DEFAULT '#1f2a44'::character varying NOT NULL,
     logo_url character varying,
     logo_public_id character varying,
+    logo_on_dark_url character varying,
+    logo_on_dark_public_id character varying,
+    default_look character varying(10) DEFAULT 'classic'::character varying NOT NULL,
+    scope3_colour character varying,
     updated_at timestamp without time zone DEFAULT now() NOT NULL
 );
 CREATE TABLE public.category (
@@ -190,6 +194,7 @@ CREATE TABLE public.emission_document (
     file_size integer,
     document_type public.emission_document_document_type_enum DEFAULT 'other'::public.emission_document_document_type_enum NOT NULL,
     description character varying,
+    ai_invoice_id integer,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL,
     emission_id integer,
@@ -354,6 +359,7 @@ CREATE TABLE public."user" (
     role character varying NOT NULL,
     notification_preferences jsonb DEFAULT '{}'::jsonb,
     timezone character varying,
+    appearance character varying(10) DEFAULT 'system'::character varying NOT NULL,
     site_id integer
 );
 CREATE TABLE public.user_categories (
@@ -454,6 +460,7 @@ CREATE INDEX "IDX_78d822ee1ebeb703dbecdf8e61" ON public.user_categories USING bt
 CREATE INDEX "IDX_85f257e9212fe12ca6307db4c3" ON public.notification USING btree (read);
 CREATE INDEX "IDX_876af02663eefdbbd607c73634" ON public.user_sites USING btree (user_id);
 CREATE INDEX "IDX_8bdc07e9c41ce8d83730f0f5d8" ON public.notification USING btree (created_at);
+CREATE INDEX "IDX_8bec8c26f1205ff4edfce59a94" ON public.emission_document USING btree (ai_invoice_id);
 CREATE INDEX "IDX_bef355fa4ae83acba4ef70a833" ON public.site_categories USING btree (site_id);
 CREATE INDEX "IDX_bfbd49560a7446ce9a2825cffb" ON public.column_config_columns USING btree (column_id);
 ALTER TABLE ONLY public.production_data

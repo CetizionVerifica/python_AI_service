@@ -123,15 +123,20 @@ async def bulk_delete_invoices(body: BulkDeleteRequest):
     if not ids:
         raise HTTPException(status_code=400, detail="ids list is required")
 
+    # The link check happens inside the delete transaction (rows locked).
     deleted = database.bulk_delete_invoices(ids)
 
-    # Cleanup Cloudinary
+    # Cleanup Cloudinary, except files that ESG-lite evidence documents still
+    # use (ESG-lite deletes the file when the last such document goes).
     for inv in deleted:
+        if inv["file_linked"]:
+            continue
         cloudinary_service.delete_file(inv["cloudinary_public_id"])
 
     return {
         "message": f"Successfully deleted {len(deleted)} invoice(s)",
         "deleted": len(deleted),
+        "files_kept": sum(1 for inv in deleted if inv["file_linked"]),
     }
 
 
@@ -147,14 +152,18 @@ async def get_invoice(invoice_id: int):
 @router.delete("/invoices/{invoice_id}")
 async def delete_invoice(invoice_id: int):
     """Delete an invoice (DB + Cloudinary)."""
+    # The link check happens inside the delete transaction (row locked).
     deleted = database.delete_invoice(invoice_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    # Cleanup Cloudinary
-    cloudinary_service.delete_file(deleted["cloudinary_public_id"])
+    # Cleanup Cloudinary, unless ESG-lite evidence documents still use the file
+    # (ESG-lite deletes it when the last such document goes).
+    file_kept = deleted["file_linked"]
+    if not file_kept:
+        cloudinary_service.delete_file(deleted["cloudinary_public_id"])
 
-    return {"message": "Invoice deleted successfully", "invoice_id": invoice_id}
+    return {"message": "Invoice deleted successfully", "invoice_id": invoice_id, "file_kept": file_kept}
 
 
 @router.get("/invoices/{invoice_id}/serve")

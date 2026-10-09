@@ -178,17 +178,34 @@ def get_invoice_by_id(invoice_id: int) -> dict | None:
 
 
 def delete_invoice(invoice_id: int) -> dict | None:
-    """Delete an invoice and return the deleted record (for Cloudinary cleanup)."""
+    """Delete an invoice and return the deleted record (for Cloudinary cleanup).
+
+    The record carries ``file_linked``: True when ESG-lite evidence documents
+    still use the invoice's file, which must then be kept. The link check runs
+    in the same transaction as the delete, with the invoice row locked
+    (FOR UPDATE), so a link being added at the same moment (ESG-lite holds
+    the row FOR SHARE while it links) is either seen here or refused there.
+    """
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT invoice_id FROM invoice WHERE invoice_id = %s FOR UPDATE",
+                (invoice_id,),
+            )
+            if cur.fetchone() is None:
+                conn.rollback()
+                return None
+            linked = _linked_invoice_ids(cur, [invoice_id])
             cur.execute(
                 "DELETE FROM invoice WHERE invoice_id = %s RETURNING *",
                 (invoice_id,),
             )
             row = cur.fetchone()
             conn.commit()
-            return dict(row) if row else None
+            if not row:
+                return None
+            return {**dict(row), "file_linked": invoice_id in linked}
     except Exception as e:
         conn.rollback()
         logger.error(f"DB delete_invoice failed: {e}")
@@ -198,23 +215,72 @@ def delete_invoice(invoice_id: int) -> dict | None:
 
 
 def bulk_delete_invoices(invoice_ids: list[int]) -> list[dict]:
-    """Bulk delete invoices and return deleted records."""
+    """Bulk delete invoices and return deleted records.
+
+    Each record carries ``file_linked`` (see delete_invoice); rows are locked
+    in id order before the link check, all in one transaction.
+    """
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "DELETE FROM invoice WHERE invoice_id = ANY(%s) RETURNING *",
+                "SELECT invoice_id FROM invoice WHERE invoice_id = ANY(%s) ORDER BY invoice_id FOR UPDATE",
                 (invoice_ids,),
+            )
+            locked = [r["invoice_id"] for r in cur.fetchall()]
+            linked = _linked_invoice_ids(cur, locked)
+            cur.execute(
+                "DELETE FROM invoice WHERE invoice_id = ANY(%s) RETURNING *",
+                (locked,),
             )
             rows = cur.fetchall()
             conn.commit()
-            return [dict(row) for row in rows]
+            return [{**dict(row), "file_linked": row["invoice_id"] in linked} for row in rows]
     except Exception as e:
         conn.rollback()
         logger.error(f"DB bulk_delete_invoices failed: {e}")
         raise
     finally:
         release_connection(conn)
+
+
+def invoice_ids_with_documents(invoice_ids: list[int]) -> set[int]:
+    """Invoice ids that ESG-lite evidence documents still point at.
+
+    ESG-lite's POST /user/documents/from-invoice attaches an invoice's
+    Cloudinary file to emission entries (emission_document.ai_invoice_id),
+    so those files must outlive the invoice row. Returns an empty set when
+    the column does not exist yet (ESG-lite migrate:document-ai-invoice not
+    run), which keeps today's behaviour.
+    """
+    if not invoice_ids:
+        return set()
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            return _linked_invoice_ids(cur, invoice_ids)
+    finally:
+        release_connection(conn)
+
+
+def _linked_invoice_ids(cur, invoice_ids: list[int]) -> set[int]:
+    """invoice_ids_with_documents on an open RealDictCursor (same transaction)."""
+    if not invoice_ids:
+        return set()
+    cur.execute(
+        """
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'emission_document' AND column_name = 'ai_invoice_id'
+        """
+    )
+    if cur.fetchone() is None:
+        return set()
+    cur.execute(
+        "SELECT DISTINCT ai_invoice_id FROM emission_document WHERE ai_invoice_id = ANY(%s)",
+        (list(invoice_ids),),
+    )
+    return {row["ai_invoice_id"] for row in cur.fetchall()}
 
 
 # ---------------------------------------------------------------------------
