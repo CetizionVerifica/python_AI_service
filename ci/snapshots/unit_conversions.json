@@ -1,0 +1,74 @@
+[
+  {
+    "exact_match": false,
+    "factor": 3.78541,
+    "from": "gallon",
+    "to": "litre"
+  },
+  {
+    "exact_match": false,
+    "factor": 0.264172,
+    "from": "litre",
+    "to": "gallon"
+  },
+  {
+    "exact_match": false,
+    "factor": 1000,
+    "from": "kl",
+    "to": "litre"
+  },
+  {
+    "exact_match": false,
+    "factor": 1000,
+    "from": "mwh",
+    "to": "kwh"
+  },
+  {
+    "exact_match": false,
+    "factor": 0.0036,
+    "from": "kwh",
+    "to": "gj"
+  },
+  {
+    "exact_match": false,
+    "factor": 277.778,
+    "from": "gj",
+    "to": "kwh"
+  },
+  {
+    "exact_match": false,
+    "factor": 0.001,
+    "from": "kg",
+    "to": "tonne"
+  },
+  {
+    "exact_match": false,
+    "factor": 1000,
+    "from": "tonne",
+    "to": "kg"
+  },
+  {
+    "exact_match": false,
+    "factor": 0.453592,
+    "from": "lb",
+    "to": "kg"
+  },
+  {
+    "exact_match": false,
+    "factor": 1000,
+    "from": "tonne.km",
+    "to": "kg.km"
+  },
+  {
+    "exact_match": false,
+    "factor": null,
+    "from": "Tonnes",
+    "to": "kg"
+  },
+  {
+    "exact_match": false,
+    "factor": null,
+    "from": "kg",
+    "to": "litre"
+  }
+]

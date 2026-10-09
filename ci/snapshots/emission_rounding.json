@@ -1,0 +1,72 @@
+[
+  {
+    "activity": 1000,
+    "factor": 2680.0,
+    "total_tco2e": 2680.0
+  },
+  {
+    "activity": 1892.7050000000002,
+    "factor": 2680.0,
+    "total_tco2e": 5072.45
+  },
+  {
+    "activity": 12500,
+    "factor": 183.0,
+    "total_tco2e": 2287.5
+  },
+  {
+    "activity": 25000,
+    "factor": 708.0,
+    "total_tco2e": 17700.0
+  },
+  {
+    "activity": 42,
+    "factor": 708.0,
+    "total_tco2e": 29.74
+  },
+  {
+    "activity": 1.25,
+    "factor": 708.0,
+    "total_tco2e": 0.89
+  },
+  {
+    "activity": 3285000,
+    "factor": 0.233,
+    "total_tco2e": 765.4
+  },
+  {
+    "activity": 800,
+    "factor": 0.233,
+    "total_tco2e": 0.19
+  },
+  {
+    "activity": 14400,
+    "factor": 105.4,
+    "total_tco2e": 1517.76
+  },
+  {
+    "activity": 1180,
+    "factor": 250.12,
+    "total_tco2e": 295.14
+  },
+  {
+    "activity": 37.4,
+    "factor": 467.01,
+    "total_tco2e": 17.47
+  },
+  {
+    "activity": 0.125,
+    "factor": 100.0,
+    "total_tco2e": 0.01
+  },
+  {
+    "activity": 0.135,
+    "factor": 100.0,
+    "total_tco2e": 0.01
+  },
+  {
+    "activity": 2.675,
+    "factor": 1000.0,
+    "total_tco2e": 2.67
+  }
+]

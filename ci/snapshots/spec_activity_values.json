@@ -1,0 +1,74 @@
+[
+  {
+    "case": "per_method product",
+    "error": null,
+    "unit_key": "kwh",
+    "value": 3285000.0
+  },
+  {
+    "case": "per_method percent",
+    "error": null,
+    "unit_key": "kwh",
+    "value": 800.0
+  },
+  {
+    "case": "per_method percent over 100",
+    "error": "\"Share in use\" cannot be more than 100",
+    "unit_key": "kwh",
+    "value": 0.0
+  },
+  {
+    "case": "per_method blank field",
+    "error": "Missing or invalid \"Energy per use\"",
+    "unit_key": "kwh",
+    "value": 0.0
+  },
+  {
+    "case": "per_method unknown method",
+    "error": "Unknown Calculation Method \"Other\"",
+    "unit_key": "kwh",
+    "value": 0.0
+  },
+  {
+    "case": "per_method nan method",
+    "error": "Missing \"Calculation Method\"",
+    "unit_key": "kwh",
+    "value": 0.0
+  },
+  {
+    "case": "per_unit tonne.km variant",
+    "error": null,
+    "unit_key": "tonne.km",
+    "value": 14400.0
+  },
+  {
+    "case": "per_unit tkm alias",
+    "error": null,
+    "unit_key": "tonne.km",
+    "value": 300.0
+  },
+  {
+    "case": "per_unit km",
+    "error": null,
+    "unit_key": "km",
+    "value": 1180.0
+  },
+  {
+    "case": "per_unit legacy row",
+    "error": null,
+    "unit_key": "tonne.km",
+    "value": 9000.0
+  },
+  {
+    "case": "per_unit unknown unit",
+    "error": "Unit \"mile\" is not configured for this category",
+    "unit_key": "mile",
+    "value": 0.0
+  },
+  {
+    "case": "per_unit negative",
+    "error": "Missing or invalid \"Weight\"",
+    "unit_key": "tonne.km",
+    "value": 0.0
+  }
+]

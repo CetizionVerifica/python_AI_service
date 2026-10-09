@@ -1,0 +1,84 @@
+# Safety checks for every change headed to redesign/integration or main.
+#
+# Nothing here can reach production: there are no repository secrets in this
+# file (ci/check_ci_isolation.py enforces that), the OpenRouter key is a dummy,
+# and the database tests run against the disposable Postgres container below
+# and refuse any other host (ci/tests/conftest.py).
+name: CI
+
+on:
+  pull_request:
+    branches: [main, redesign/integration]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main, redesign/integration]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TZ: UTC
+  PYTHONPATH: .
+  OPENROUTER_API_KEY: ci-dummy-not-a-real-key
+  CI_THROWAWAY_DB: "true"
+  DB_HOST: localhost
+  DB_PORT: "5432"
+  DB_USERNAME: postgres
+  DB_PASSWORD: postgres
+  DB_NAME: ci_ai_service
+  # True only when a reviewer has put the data-loss-reviewed label on the PR.
+  DATA_LOSS_REVIEWED: ${{ contains(github.event.pull_request.labels.*.name, 'data-loss-reviewed') }}
+
+jobs:
+  checks:
+    name: Data safety and tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ci_ai_service
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: CI has no production access
+        run: python3 ci/check_ci_isolation.py
+
+      - name: No destructive schema or data changes
+        if: github.event_name == 'pull_request'
+        run: python3 ci/check_destructive_changes.py "origin/${{ github.base_ref }}"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.10"
+      - name: Install dependencies (lockfile must be current)
+        run: uv sync --locked
+
+      - name: Compile
+        run: uv run python -m compileall -q app main.py
+
+      - name: Lint for errors that crash at runtime
+        run: uvx ruff check --select E9,F63,F7,F82 app main.py scripts
+
+      - name: Calculation snapshots, bulk import against the ESG-lite schema, startup DDL
+        run: uv run --with pytest pytest ci/tests -p no:cacheprovider
+
+      - name: Upload changed calculation results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-actual
+          path: "*.actual.json"
+          if-no-files-found: ignore
