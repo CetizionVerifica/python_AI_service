@@ -2,6 +2,7 @@
 import json
 import logging
 import threading
+import time
 from typing import Any, Dict
 from openai import OpenAI
 from app.core.config import settings
@@ -283,6 +284,34 @@ If there is only one invoice, still return it inside the array.
 If there is only one activity per invoice, still return it inside the activities array."""
 
 
+def _attempt(messages: list[dict], slot_wait_s: float, deadline: float | None = None) -> str:
+    """One OpenRouter call. With a deadline (time.monotonic()), the request gets
+    whatever time is left after waiting for a slot; otherwise LLM_TIMEOUT_S."""
+    if not _llm_slots.acquire(timeout=slot_wait_s):
+        logger.warning("OpenRouter call skipped: all LLM slots busy")
+        raise LLMError("The AI service is busy. Please try again shortly.")
+    try:
+        timeout_s = settings.LLM_TIMEOUT_S if deadline is None else deadline - time.monotonic()
+        if timeout_s <= 0.1:
+            raise LLMError("The AI service is busy. Please try again shortly.")
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            max_tokens=13333,
+            timeout=timeout_s,
+        )
+        return response.choices[0].message.content
+    except LLMError:
+        raise
+    except Exception as e:
+        logger.warning(f"OpenRouter call failed: {e}")
+        raise e
+    finally:
+        _llm_slots.release()
+
+
 @retry(
     reraise=True,
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -293,24 +322,16 @@ def _call_openrouter(messages: list[dict]) -> str:
     Calls OpenRouter via the OpenAI SDK with retry logic. Each attempt times
     out after LLM_TIMEOUT_S.
     """
-    if not _llm_slots.acquire(timeout=settings.LLM_TIMEOUT_S):
-        logger.warning("OpenRouter call skipped: all LLM slots busy, retrying...")
-        raise LLMError("The AI service is busy. Please try again shortly.")
-    try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.1,
-            max_tokens=13333,
-            timeout=settings.LLM_TIMEOUT_S,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.warning(f"OpenRouter call failed, retrying... Error: {e}")
-        raise e
-    finally:
-        _llm_slots.release()
+    return _attempt(messages, settings.LLM_TIMEOUT_S)
+
+
+def call_openrouter_within(messages: list[dict], budget_s: float) -> str:
+    """
+    One OpenRouter call that finishes, slot wait included, within budget_s,
+    for callers that give up after a fixed time. No retries: the caller's own
+    retry (a new request) gets a fresh budget.
+    """
+    return _attempt(messages, budget_s, time.monotonic() + budget_s)
 
 
 def extract_structured_data(

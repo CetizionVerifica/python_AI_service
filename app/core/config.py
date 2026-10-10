@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     MAX_RETRIES: int = 2
     MAX_CONCURRENT_REQUESTS: int = 5
     MAX_CONCURRENT_LLM: int = 3
+    # Whole-request budget for column-name inference, slot wait included. ESG-lite
+    # gives up on these calls after AI_SERVICE_TIMEOUT_MS (30 s by default).
+    COLUMN_INFER_BUDGET_S: float = 25.0
 
 settings = Settings()
 
