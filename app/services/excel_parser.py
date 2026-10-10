@@ -1005,6 +1005,8 @@ def _build_category_resolver(site_id: int, category_id: int) -> dict[str, str]:
       1. column_config.emission_category_mapping JSONB (pipe-separated keys)
       2. Fallback: emission_category_mapping table (ECM) which stores
          company_category_name → global_category_name per company/site/category.
+         Only the site's own company's rows: a site-less mapping of another
+         company must never resolve a name here.
 
     Returns empty dict if no mapping source has data.
     """
@@ -1035,9 +1037,10 @@ def _build_category_resolver(site_id: int, category_id: int) -> dict[str, str]:
                 FROM emission_category_mapping
                 WHERE category_id = %s
                   AND (site_id = %s OR site_id IS NULL)
+                  AND company_id = (SELECT company_id FROM site WHERE site_id = %s)
                 ORDER BY site_id DESC NULLS LAST
                 """,
-                (category_id, site_id),
+                (category_id, site_id, site_id),
             )
             for row in cur.fetchall():
                 key = (row["company_category_name"] or "").strip().lower()

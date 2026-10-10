@@ -17,12 +17,29 @@ class CategoryMatch:
     confidence: float  # 0-100
 
 
-def fetch_emission_categories() -> list[dict]:
-    """Fetch all distinct emission category names with their parent category info from DB."""
+# Factors visible to a site: the shared library (no site) plus the factors of
+# every site in the same company. Never another company's factors.
+_COMPANY_SCOPE_SQL = """
+    (ef.site_id IS NULL OR ef.site_id IN (
+        SELECT s2.site_id FROM site s1
+        JOIN site s2 ON s2.company_id = s1.company_id
+        WHERE s1.site_id = %(site_id)s AND s1.company_id IS NOT NULL
+    ) OR ef.site_id = %(site_id)s)
+"""
+
+
+def fetch_emission_categories(site_id: int | None = None, all_companies: bool = False) -> list[dict]:
+    """Distinct emission category names with their parent category info.
+
+    Scoped to the shared factors plus the factors of ``site_id``'s company
+    (only the shared ones when ``site_id`` is None). ``all_companies=True``
+    lists every company's factors; only Superadmin callers may ask for that.
+    """
+    where = "" if all_companies else "WHERE " + _COMPANY_SCOPE_SQL
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT DISTINCT
                     ef.emission_category_name,
                     ef.denominator_unit,
@@ -31,8 +48,9 @@ def fetch_emission_categories() -> list[dict]:
                     c.scope
                 FROM emission_factors ef
                 JOIN category c ON c.category_id = ef.category_id
+                {where}
                 ORDER BY c.category_id, ef.emission_category_name
-            """)
+            """, {"site_id": site_id})
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
     finally:
@@ -74,8 +92,8 @@ def match_category(
     """
     Fuzzy-match an extracted activity description against known emission categories.
     When site_id and category_id are provided, matching is scoped to that combination
-    (same scope as the Node.js emission-factors API). Falls back to all categories
-    if the scoped query returns no results.
+    (same scope as the Node.js emission-factors API). Falls back to the shared
+    factors plus the site's own company's factors, never another company's.
     """
     if not activity_description:
         return None
@@ -92,11 +110,11 @@ def match_category(
         else:
             logger.warning(
                 f"No scoped emission categories found for site_id={site_id}, "
-                f"category_id={category_id}. Falling back to global match."
+                f"category_id={category_id}. Falling back to the company's factors."
             )
 
     if not categories:
-        categories = fetch_emission_categories()
+        categories = fetch_emission_categories(site_id=site_id)
 
     if not categories:
         logger.warning("No emission categories found in DB for matching")
