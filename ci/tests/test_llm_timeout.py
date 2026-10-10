@@ -102,3 +102,13 @@ def test_column_inference_routes_run_off_the_event_loop():
 
     assert not inspect.iscoroutinefunction(column_config.infer_columns)
     assert not inspect.iscoroutinefunction(column_config.infer_all_columns)
+
+
+def test_factor_upload_runs_category_inference_off_the_event_loop():
+    import inspect
+
+    from app.api import emission_factors
+
+    src = inspect.getsource(emission_factors)
+    assert "= infer_category_mapping(" not in src
+    assert src.count("run_in_threadpool(\n                    infer_category_mapping") == 2

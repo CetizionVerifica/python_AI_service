@@ -4,6 +4,7 @@ import logging
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.services import storage
@@ -96,8 +97,9 @@ async def parse_emission_factor_file(
         if db_categories and result.parent_categories:
             try:
                 cats = [DbCategory(**c) for c in json.loads(db_categories)]
-                result.category_suggestions = infer_category_mapping(
-                    result.parent_categories, cats
+                # Blocking LLM call: keep it off the event loop.
+                result.category_suggestions = await run_in_threadpool(
+                    infer_category_mapping, result.parent_categories, cats
                 )
             except Exception as e:
                 logger.warning(
@@ -206,8 +208,9 @@ async def re_analyze_emission_factor_file(body: ReAnalyzeRequest):
         if body.db_categories and result.parent_categories:
             try:
                 cats = [DbCategory(**c) for c in body.db_categories]
-                result.category_suggestions = infer_category_mapping(
-                    result.parent_categories, cats
+                # Blocking LLM call: keep it off the event loop.
+                result.category_suggestions = await run_in_threadpool(
+                    infer_category_mapping, result.parent_categories, cats
                 )
             except Exception as e:
                 logger.warning(f"Category inference failed (non-fatal): {e}")
