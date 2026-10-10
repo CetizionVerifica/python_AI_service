@@ -96,3 +96,21 @@ def test_bulk_import_results(throwaway_db, stub_storage, snapshot):
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
     snapshot("bulk_import", {"imports": summaries, "stored_emissions": rows})
+
+
+def test_bulk_import_lists_skipped_rows(throwaway_db, stub_storage):
+    """The upload screen offers skipped rows back as a file, so each one needs its row number and reason."""
+    from app.services import excel_parser as ep
+
+    imp = IMPORTS[1]
+    stub_storage[99] = imp["csv"]
+    result = ep.import_all_rows(
+        document_id=99, mappings=imp["mappings"], selected_categories=[],
+        site_id=imp["site_id"], category_id=imp["category_id"],
+        date_of_reporting="2025-06-30", user_id=1,
+    )
+
+    assert result["skipped"] == 3
+    assert [r["row"] for r in result["skipped_rows"]] == [3, 4, 5]
+    assert [r["emission_category"] for r in result["skipped_rows"]] == ["India Grid", "India Grid", "Mars Grid"]
+    assert all(r["reason"] for r in result["skipped_rows"])
