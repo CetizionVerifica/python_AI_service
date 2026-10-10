@@ -35,6 +35,22 @@ Server runs on `http://localhost:8000` by default.
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Cloudinary file storage |
 | `OPENROUTER_API_KEY` | OpenRouter API key for LLM |
 | `OPENROUTER_MODEL` | LLM model (default: `google/gemini-3-flash-preview`) |
+| `AUTH_JWT_SECRET` | **Required.** Must equal ESG-lite's `JWT_SECRET`; verifies the sign-in token browsers send. The service does not start without it |
+| `AI_SERVICE_KEY` | Shared key ESG-lite sends as `X-Service-Key` on its server-to-server calls. Empty disables those calls |
+
+## Authentication
+
+Every `/v1/*` route requires a caller; `/health` and `/` stay open.
+
+- **Browser calls** send `Authorization: Bearer <ESG-lite token>` (the token ESG-lite returns at sign-in, HS256 with `JWT_SECRET`). The caller's role and sites are read from the shared ESG-lite tables (`"user"`, `user_sites`, `site`): Superadmin sees every site, an Admin every site of their company, a User or Manager their own site(s).
+  - A `site_id` in the query, form or JSON body outside the caller's sites is refused with 403.
+  - `GET /v1/invoices` returns only invoices at the caller's sites (invoices without a site: only to their uploader and Superadmin). Reading, serving, re-extracting or deleting another site's invoice answers 404.
+  - `uploaded_by` / `user_id` sent by the client are ignored; the signed-in user is recorded.
+  - The Excel import wizard (`/v1/excel/*`) only reads back documents the caller uploaded (Superadmin: any).
+  - `/v1/emission-factors/*`, `/v1/category-mappings/*` and `/v1/emission-categories` are Superadmin only.
+- **ESG-lite server-to-server calls** send `X-Service-Key: <AI_SERVICE_KEY>`. That key is accepted only on `/v1/column-config/*` and `/v1/sea-route`.
+
+No token → 401; a valid caller without access → 403 (404 for a record outside their sites).
 
 ## API Endpoints
 

@@ -8,6 +8,13 @@ class Settings(BaseSettings):
     OPENROUTER_MODEL: str = "google/gemini-3-flash-preview"
     OPENROUTER_REFERER: str = "https://esg-lite.app"
     OPENROUTER_TITLE: str = "ESG-Lite OCR"
+
+    # Auth. AUTH_JWT_SECRET must equal ESG-lite's JWT_SECRET: browser calls
+    # carry the ESG-lite sign-in token. Required, so the service refuses to
+    # start without it. AI_SERVICE_KEY is the shared key ESG-lite sends as
+    # X-Service-Key on its server-to-server calls; empty disables those calls.
+    AUTH_JWT_SECRET: str
+    AI_SERVICE_KEY: str = ""
     
     # Database
     DB_HOST: str = "localhost"

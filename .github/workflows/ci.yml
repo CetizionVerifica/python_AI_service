@@ -24,6 +24,9 @@ env:
   TZ: UTC
   PYTHONPATH: .
   OPENROUTER_API_KEY: ci-dummy-not-a-real-key
+  # Dummies: the auth tests sign their own tokens with this secret.
+  AUTH_JWT_SECRET: ci-dummy-jwt-secret-not-a-real-secret-0123456789
+  AI_SERVICE_KEY: ci-dummy-service-key-not-real
   CI_THROWAWAY_DB: "true"
   DB_HOST: localhost
   DB_PORT: "5432"
