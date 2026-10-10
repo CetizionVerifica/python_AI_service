@@ -37,6 +37,7 @@ Server runs on `http://localhost:8000` by default.
 | `OPENROUTER_MODEL` | LLM model (default: `google/gemini-3-flash-preview`) |
 | `LLM_TIMEOUT_S`, `MAX_RETRIES`, `MAX_CONCURRENT_LLM` | Per-call LLM timeout in seconds (default 90), retries after a failed call (default 2), LLM calls in flight per process (default 3) |
 | `AUTH_JWT_SECRET` | **Required.** Must equal ESG-lite's `JWT_SECRET`; verifies the sign-in token browsers send. The service does not start without it |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the service (default `http://localhost:5173,http://localhost:3000`). Set it to the deployed frontend's origin |
 | `AI_SERVICE_KEY` | Shared key ESG-lite sends as `X-Service-Key` on its server-to-server calls. Empty disables those calls |
 
 ## Authentication

@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     AUTH_JWT_SECRET: str
     AI_SERVICE_KEY: str = ""
     
+    # Browser origins allowed to call this service (CORS), comma-separated,
+    # e.g. "https://app.esglite.com,https://staging.esglite.com".
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+
     # Database
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
