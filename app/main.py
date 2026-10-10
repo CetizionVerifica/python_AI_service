@@ -6,6 +6,7 @@ from app.api.categories import router as categories_router
 from app.api.emission_factors import router as emission_factors_router
 from app.api.category_mapping import router as category_mapping_router
 from app.api.column_config import router as column_config_router
+from app.core.config import settings
 from app.core.logging import setup_logging
 from app.api.excel import router as excel_router
 from app.core.database import ensure_emission_factor_uploads_table, ensure_uploaded_documents_table
@@ -34,7 +35,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=settings.cors_allowed_origins,  # CORS_ALLOWED_ORIGINS
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

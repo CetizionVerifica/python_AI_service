@@ -1,21 +1,63 @@
 {
   "imports": [
     {
-      "inserted": 9,
+      "fera_inserted": 3,
+      "inserted": 4,
       "name": "stationary combustion with per-row dates and FERA",
-      "skipped": 0,
+      "not_selected": 0,
+      "skipped": 2,
+      "skipped_rows": [
+        {
+          "emission_category": "Unobtainium",
+          "reason": "No emission factor found for 'Unobtainium' (year 2024)",
+          "row": 5
+        },
+        {
+          "emission_category": "Diesel",
+          "reason": "No unit conversion from 'kg' to 'litre'",
+          "row": 6
+        }
+      ],
       "total_rows": 6
     },
     {
+      "fera_inserted": 0,
       "inserted": 2,
       "name": "use of sold products (per-method spec), bad rows skipped",
+      "not_selected": 0,
       "skipped": 3,
+      "skipped_rows": [
+        {
+          "emission_category": "India Grid",
+          "reason": "Missing or invalid \"Energy per use\"",
+          "row": 3
+        },
+        {
+          "emission_category": "India Grid",
+          "reason": "\"Share in use\" cannot be more than 100",
+          "row": 4
+        },
+        {
+          "emission_category": "Mars Grid",
+          "reason": "No emission factor found for 'Mars Grid' (year 2024)",
+          "row": 5
+        }
+      ],
       "total_rows": 5
     },
     {
+      "fera_inserted": 0,
       "inserted": 2,
       "name": "transport (per-unit spec)",
+      "not_selected": 0,
       "skipped": 1,
+      "skipped_rows": [
+        {
+          "emission_category": "HGV Diesel [tonne.km]",
+          "reason": "Missing or invalid \"Weight\"",
+          "row": 3
+        }
+      ],
       "total_rows": 3
     }
   ],
@@ -38,6 +80,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": true,
       "site_id": 1,
       "status": "pending",
       "total_emission": "2680.0",
@@ -61,6 +104,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": true,
       "site_id": 1,
       "status": "pending",
       "total_emission": "5072.45",
@@ -84,6 +128,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": false,
       "site_id": 1,
       "status": "pending",
       "total_emission": "2287.5",
@@ -107,47 +152,10 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": true,
       "site_id": 1,
       "status": "pending",
       "total_emission": "5896.0",
-      "unit": "tCO2e"
-    },
-    {
-      "activity_data": {
-        "activity_data_unit": "litre",
-        "activity_value": "10",
-        "emission_category": "Unobtainium"
-      },
-      "activity_data_unit": "litre",
-      "category_id": 1,
-      "date": "2025-04-15",
-      "factor": null,
-      "site_id": 1,
-      "status": "pending",
-      "total_emission": "0.0",
-      "unit": "tCO2e"
-    },
-    {
-      "activity_data": {
-        "activity_data_unit": "kg",
-        "activity_value": "10",
-        "emission_category": "Diesel"
-      },
-      "activity_data_unit": "kg",
-      "category_id": 1,
-      "date": "2025-05-15",
-      "factor": {
-        "denominator_unit": "litre",
-        "emission_category_name": "Diesel",
-        "emission_factor_id": 1,
-        "factor_value": 2680.0,
-        "global_category_name": "Diesel",
-        "source": "CI",
-        "year": 2024
-      },
-      "site_id": 1,
-      "status": "pending",
-      "total_emission": "0.0",
       "unit": "tCO2e"
     },
     {
@@ -170,6 +178,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": true,
       "site_id": 1,
       "status": "pending",
       "total_emission": "610.0",
@@ -195,6 +204,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": true,
       "site_id": 1,
       "status": "pending",
       "total_emission": "1154.55",
@@ -220,6 +230,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": true,
       "site_id": 1,
       "status": "pending",
       "total_emission": "1342.0",
@@ -249,6 +260,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": false,
       "site_id": 1,
       "status": "pending",
       "total_emission": "765.4",
@@ -278,6 +290,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": false,
       "site_id": 1,
       "status": "pending",
       "total_emission": "0.19",
@@ -304,6 +317,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": false,
       "site_id": 1,
       "status": "pending",
       "total_emission": "1517.76",
@@ -330,6 +344,7 @@
         "source": "CI",
         "year": 2024
       },
+      "fera_linked": false,
       "site_id": 1,
       "status": "pending",
       "total_emission": "295.14",

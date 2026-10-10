@@ -31,11 +31,13 @@ Server runs on `http://localhost:8000` by default.
 
 | Variable | Description |
 |---|---|
-| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | PostgreSQL connection |
+| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | PostgreSQL connection. `DB_PASSWORD` has no default; set it |
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Cloudinary file storage |
 | `OPENROUTER_API_KEY` | OpenRouter API key for LLM |
 | `OPENROUTER_MODEL` | LLM model (default: `google/gemini-3-flash-preview`) |
+| `LLM_TIMEOUT_S`, `MAX_RETRIES`, `MAX_CONCURRENT_LLM` | Per-call LLM timeout in seconds (default 90), retries after a failed call (default 2), LLM calls in flight per process (default 3) |
 | `AUTH_JWT_SECRET` | **Required.** Must equal ESG-lite's `JWT_SECRET`; verifies the sign-in token browsers send. The service does not start without it |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the service (default `http://localhost:5173,http://localhost:3000`). Set it to the deployed frontend's origin |
 | `AI_SERVICE_KEY` | Shared key ESG-lite sends as `X-Service-Key` on its server-to-server calls. Empty disables those calls |
 
 ## Authentication
@@ -178,12 +180,15 @@ DELETE /v1/invoices/bulk
 ├── scripts/
 │   ├── test_all_json.py       # Test all sample bills → JSON
 │   └── test_emission.py       # Test emission mapping
-├── sample-bills/              # Sample PDFs for testing
+├── sample-bills/              # Local only (git-ignored): put your own test PDFs here
 ├── main.py                    # Entry point
 └── pyproject.toml
 ```
 
 ## Testing
+
+The scripts below read PDFs from `sample-bills/`. That folder is git-ignored:
+real client bills must not be committed, so put your own test PDFs there.
 
 ```bash
 # Test all sample bills and save results as JSON

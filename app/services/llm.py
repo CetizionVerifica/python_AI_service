@@ -1,6 +1,8 @@
 
 import json
 import logging
+import threading
+import time
 from typing import Any, Dict
 from openai import OpenAI
 from app.core.config import settings
@@ -11,10 +13,15 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 logger = logging.getLogger(__name__)
 
 
-# Configure OpenRouter client via OpenAI SDK
+# Configure OpenRouter client via OpenAI SDK. Every call is bounded by
+# LLM_TIMEOUT_S so a hung request can't hold a worker indefinitely; retries
+# are done once, by the tenacity decorator on _call_openrouter (MAX_RETRIES),
+# not again inside the SDK.
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=settings.OPENROUTER_API_KEY,
+    timeout=settings.LLM_TIMEOUT_S,
+    max_retries=0,
     default_headers={
         "HTTP-Referer": settings.OPENROUTER_REFERER,
         "X-Title": settings.OPENROUTER_TITLE,
@@ -27,6 +34,11 @@ MODEL_NAME = settings.OPENROUTER_MODEL
 
 class LLMError(RuntimeError):
     pass
+
+
+# At most MAX_CONCURRENT_LLM calls in flight per process; a caller waits up
+# to LLM_TIMEOUT_S for a slot, then gets an LLMError instead of queueing forever.
+_llm_slots = threading.BoundedSemaphore(max(1, settings.MAX_CONCURRENT_LLM))
 
 
 def _clean_json_text(text: str) -> str:
@@ -272,27 +284,54 @@ If there is only one invoice, still return it inside the array.
 If there is only one activity per invoice, still return it inside the activities array."""
 
 
-@retry(
-    reraise=True,
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    stop=stop_after_attempt(3),
-)
-def _call_openrouter(messages: list[dict]) -> str:
-    """
-    Calls OpenRouter via the OpenAI SDK with retry logic.
-    """
+def _attempt(messages: list[dict], slot_wait_s: float, deadline: float | None = None) -> str:
+    """One OpenRouter call. With a deadline (time.monotonic()), the request gets
+    whatever time is left after waiting for a slot; otherwise LLM_TIMEOUT_S."""
+    if not _llm_slots.acquire(timeout=slot_wait_s):
+        logger.warning("OpenRouter call skipped: all LLM slots busy")
+        raise LLMError("The AI service is busy. Please try again shortly.")
     try:
+        timeout_s = settings.LLM_TIMEOUT_S if deadline is None else deadline - time.monotonic()
+        if timeout_s <= 0.1:
+            raise LLMError("The AI service is busy. Please try again shortly.")
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0.1,
             max_tokens=13333,
+            timeout=timeout_s,
         )
         return response.choices[0].message.content
+    except LLMError:
+        raise
     except Exception as e:
-        logger.warning(f"OpenRouter call failed, retrying... Error: {e}")
+        logger.warning(f"OpenRouter call failed: {e}")
         raise e
+    finally:
+        _llm_slots.release()
+
+
+@retry(
+    reraise=True,
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(max(0, settings.MAX_RETRIES) + 1),
+)
+def _call_openrouter(messages: list[dict]) -> str:
+    """
+    Calls OpenRouter via the OpenAI SDK with retry logic. Each attempt times
+    out after LLM_TIMEOUT_S.
+    """
+    return _attempt(messages, settings.LLM_TIMEOUT_S)
+
+
+def call_openrouter_within(messages: list[dict], budget_s: float) -> str:
+    """
+    One OpenRouter call that finishes, slot wait included, within budget_s,
+    for callers that give up after a fixed time. No retries: the caller's own
+    retry (a new request) gets a fresh budget.
+    """
+    return _attempt(messages, budget_s, time.monotonic() + budget_s)
 
 
 def extract_structured_data(

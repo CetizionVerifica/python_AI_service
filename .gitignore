@@ -23,5 +23,8 @@ plan.md
 # Transient upload scratch space (never belongs in git)
 app/temp/
 
+# Local test bills (real client documents never belong in git)
+sample-bills/
+
 # CI snapshot diffs
 *.actual.json

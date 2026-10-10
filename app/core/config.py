@@ -16,11 +16,22 @@ class Settings(BaseSettings):
     AUTH_JWT_SECRET: str
     AI_SERVICE_KEY: str = ""
     
+    # Browser origins allowed to call this service (CORS), comma-separated,
+    # e.g. "https://app.esglite.com,https://staging.esglite.com".
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+
     # Database
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
     DB_USERNAME: str = "postgres"
-    DB_PASSWORD: str = "postgres123"
+    # No default secret: set DB_PASSWORD in the environment. Empty only works
+    # for a passwordless local Postgres; otherwise the first query fails with
+    # a message naming DB_PASSWORD (app/core/database.py).
+    DB_PASSWORD: str = ""
     DB_NAME: str = "emissions_db"
 
     # Cloudinary
@@ -47,6 +58,9 @@ class Settings(BaseSettings):
     MAX_RETRIES: int = 2
     MAX_CONCURRENT_REQUESTS: int = 5
     MAX_CONCURRENT_LLM: int = 3
+    # Whole-request budget for column-name inference, slot wait included. ESG-lite
+    # gives up on these calls after AI_SERVICE_TIMEOUT_MS (30 s by default).
+    COLUMN_INFER_BUDGET_S: float = 25.0
 
 settings = Settings()
 

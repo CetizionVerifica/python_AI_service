@@ -8,7 +8,8 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from app.services.llm import _call_openrouter, _parse_json_object
+from app.core.config import settings
+from app.services.llm import _parse_json_object, call_openrouter_within
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -68,10 +69,12 @@ class InferAllColumnsResponse(BaseModel):
 # --- Endpoints ---
 
 @router.post("/column-config/infer-columns", response_model=InferColumnsResponse)
-async def infer_columns(body: InferColumnsRequest):
+def infer_columns(body: InferColumnsRequest):
     """
     Use LLM to infer meaningful column names from emission category dimension values.
     Single dimension group variant (backward compatible).
+    Plain def: FastAPI runs it in a worker thread, so the blocking LLM call
+    doesn't hold up the event loop. Bounded by COLUMN_INFER_BUDGET_S.
     """
     try:
         prompt = _build_inference_prompt(body)
@@ -94,7 +97,7 @@ async def infer_columns(body: InferColumnsRequest):
             },
         ]
 
-        raw = _call_openrouter(messages)
+        raw = call_openrouter_within(messages, settings.COLUMN_INFER_BUDGET_S)
         parsed = _parse_json_object(raw)
 
         columns = []
@@ -117,7 +120,7 @@ async def infer_columns(body: InferColumnsRequest):
 
 
 @router.post("/column-config/infer-all-columns", response_model=InferAllColumnsResponse)
-async def infer_all_columns(body: InferAllColumnsRequest):
+def infer_all_columns(body: InferAllColumnsRequest):
     """
     Infer column names for ALL dimension groups in a single LLM call.
     Used when a category has emission factors with mixed dimension counts
@@ -145,7 +148,7 @@ async def infer_all_columns(body: InferAllColumnsRequest):
             {"role": "user", "content": json.dumps(user_data)},
         ]
 
-        raw = _call_openrouter(messages)
+        raw = call_openrouter_within(messages, settings.COLUMN_INFER_BUDGET_S)
         parsed = _parse_json_object(raw)
 
         groups = []

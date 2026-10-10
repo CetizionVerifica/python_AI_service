@@ -167,7 +167,7 @@ def test_users_may_call_column_config_and_sea_route(client):
 def test_setup_screens_are_superadmin_only(client, monkeypatch):
     from app.services import category_matcher
 
-    monkeypatch.setattr(category_matcher, "fetch_emission_categories", lambda: [])
+    monkeypatch.setattr(category_matcher, "fetch_emission_categories", lambda **kw: [])
     for user in (USER_A, MANAGER_A, ADMIN_A):
         assert client.get("/v1/emission-categories", headers=bearer(user)).status_code == 403
         assert client.get("/v1/emission-factors/uploads", headers=bearer(user)).status_code == 403

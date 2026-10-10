@@ -20,15 +20,23 @@ _pool: _pg_pool.ThreadedConnectionPool | None = None
 def _get_pool() -> _pg_pool.ThreadedConnectionPool:
     global _pool
     if _pool is None or _pool.closed:
-        _pool = _pg_pool.ThreadedConnectionPool(
-            minconn=2,
-            maxconn=20,
-            host=settings.DB_HOST,
-            port=settings.DB_PORT,
-            user=settings.DB_USERNAME,
-            password=settings.DB_PASSWORD,
-            dbname=settings.DB_NAME,
-        )
+        try:
+            _pool = _pg_pool.ThreadedConnectionPool(
+                minconn=2,
+                maxconn=20,
+                host=settings.DB_HOST,
+                port=settings.DB_PORT,
+                user=settings.DB_USERNAME,
+                password=settings.DB_PASSWORD,
+                dbname=settings.DB_NAME,
+            )
+        except psycopg2.OperationalError as exc:
+            if not settings.DB_PASSWORD:
+                raise RuntimeError(
+                    "Could not connect to Postgres and DB_PASSWORD is not set. "
+                    "Set DB_PASSWORD (and DB_HOST/DB_USERNAME/DB_NAME) in the environment."
+                ) from exc
+            raise
     return _pool
 
 
@@ -689,6 +697,85 @@ def update_uploaded_document(
         release_connection(conn)
 
 
+IMPORT_CLAIM_STALE_MINUTES = 30
+
+
+def claim_uploaded_document_for_import(document_id: int) -> tuple[bool, str | None]:
+    """
+    Atomically mark a document 'importing' so a second import of the same file
+    (double click, retry, parallel request) is refused. A claim older than
+    IMPORT_CLAIM_STALE_MINUTES is treated as left over from a crashed worker.
+
+    Returns (claimed, current_status); current_status is None when the
+    document does not exist.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE uploaded_documents
+                SET status = 'importing', updated_at = NOW()
+                WHERE id = %s
+                  AND (status NOT IN ('importing', 'imported', 'deleted')
+                       OR (status = 'importing'
+                           AND updated_at < NOW() - (%s * INTERVAL '1 minute')))
+                RETURNING id
+                """,
+                (document_id, IMPORT_CLAIM_STALE_MINUTES),
+            )
+            claimed = cur.fetchone() is not None
+            conn.commit()
+            if claimed:
+                return True, "importing"
+            cur.execute("SELECT status FROM uploaded_documents WHERE id = %s", (document_id,))
+            row = cur.fetchone()
+            return False, (row[0] if row else None)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_connection(conn)
+
+
+def mark_document_imported_with_conn(conn, document_id: int) -> bool:
+    """
+    Inside the import's own transaction: flip 'importing' to 'imported'. False
+    when another import already finished the same document, in which case the
+    caller must roll back. The row lock makes a parallel import wait here and
+    then see 'imported'.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE uploaded_documents SET status = 'imported', updated_at = NOW()
+            WHERE id = %s AND status = 'importing'
+            """,
+            (document_id,),
+        )
+        return cur.rowcount == 1
+
+
+def release_import_claim(document_id: int) -> None:
+    """A failed import hands the document back so it can be imported again."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE uploaded_documents SET status = 'uploaded', updated_at = NOW()
+                WHERE id = %s AND status = 'importing'
+                """,
+                (document_id,),
+            )
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.warning(f"Could not release the import claim on document_id={document_id}", exc_info=True)
+    finally:
+        release_connection(conn)
+
+
 def list_documents_for_cleanup(older_than_days: int = 7, limit: int = 500) -> list[dict]:
     """
     Documents whose stored file can be reclaimed: older than the cutoff and not
@@ -703,7 +790,7 @@ def list_documents_for_cleanup(older_than_days: int = 7, limit: int = 500) -> li
                 SELECT id, document_name, cloudinary_url, cloudinary_public_id, status
                 FROM uploaded_documents
                 WHERE created_at < NOW() - (%s * INTERVAL '1 day')
-                  AND status <> 'deleted'
+                  AND status NOT IN ('deleted', 'importing')
                 ORDER BY created_at ASC
                 LIMIT %s
                 """,
@@ -867,13 +954,14 @@ def fetch_emission_factor(
 
 
 
-def bulk_insert_emissions_with_conn(conn, rows: list[dict]) -> int:
+def bulk_insert_emissions_with_conn(conn, rows: list[dict], returning: bool = False):
     """
     Insert many rows into emission table using an existing connection.
-    Caller commits/rollbacks.
+    Caller commits/rollbacks. Returns the row count, or with ``returning=True``
+    the new pk_ids in the order of ``rows``.
     """
     if not rows:
-        return 0
+        return [] if returning else 0
 
     values = []
     for r in rows:
@@ -893,21 +981,43 @@ def bulk_insert_emissions_with_conn(conn, rows: list[dict]) -> int:
                 r.get("created_by"),
                 r.get("upload_batch_id"),
                 Json(ef_snapshot) if isinstance(ef_snapshot, dict) else None,
+                r.get("fera_linked_id"),
             )
         )
 
     with conn.cursor() as cur:
-        execute_values(
+        result = execute_values(
             cur,
             f"""
             INSERT INTO {EMISSION_TABLE}
               (site_id, category_id, activity_data, extra_data, total_emission, unit,
                date_of_reporting, activity_data_unit, created_by, upload_batch_id,
-               emission_factor_snapshot)
+               emission_factor_snapshot, fera_linked_id)
             VALUES %s
+            {"RETURNING pk_id" if returning else ""}
             """,
             values,
             page_size=2000,
+            fetch=returning,
         )
 
+    if returning:
+        return [r[0] for r in result]
     return len(values)
+
+
+def link_fera_rows_with_conn(conn, pairs: list[tuple[int, int]]) -> None:
+    """Point each source row at its auto-created FERA row: (source pk_id, FERA pk_id)."""
+    if not pairs:
+        return
+    with conn.cursor() as cur:
+        execute_values(
+            cur,
+            f"""
+            UPDATE {EMISSION_TABLE} AS e SET fera_linked_id = v.fera_id
+            FROM (VALUES %s) AS v(source_id, fera_id)
+            WHERE e.pk_id = v.source_id
+            """,
+            pairs,
+            page_size=2000,
+        )
