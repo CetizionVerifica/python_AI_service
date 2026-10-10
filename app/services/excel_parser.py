@@ -261,6 +261,26 @@ def _parse_numeric(value, precision: int = 6) -> Optional[float]:
         return None
 
 
+# emission_factors.factor_value is numeric(10,4): four decimal places are all
+# the database keeps. Factors are rounded to that here, so what the review
+# screen shows is exactly what gets stored, and a factor that loses digits is
+# flagged instead of silently truncated.
+FACTOR_DECIMALS = 4
+
+
+def _parse_factor(value, row_num: int, name: str, warnings: list[str]) -> Optional[float]:
+    parsed = _parse_numeric(value)
+    if parsed is None:
+        return None
+    stored = round(parsed, FACTOR_DECIMALS)
+    if abs(stored - parsed) > 1e-9:
+        warnings.append(
+            f"Row {row_num}: factor {parsed:g} for '{name}' is stored as {stored:.{FACTOR_DECIMALS}f} "
+            f"(the database keeps {FACTOR_DECIMALS} decimal places)"
+        )
+    return stored
+
+
 def _extract_factors(
     ws, schema: SpreadsheetSchema
 ) -> tuple[list[EmissionFactorRecord], list[str]]:
@@ -361,7 +381,7 @@ def _extract_factors(
                 if year_map.value_column is None:
                     continue
                 value = cells.get(year_map.value_column)
-                factor = _parse_numeric(value)
+                factor = _parse_factor(value, row_num, emission_category_name, warnings)
                 if factor is not None:
                     row_has_data = True
                     factors.append(
@@ -385,7 +405,7 @@ def _extract_factors(
                 if total_col is None:
                     continue
                 value = cells.get(total_col)
-                factor = _parse_numeric(value)
+                factor = _parse_factor(value, row_num, emission_category_name, warnings)
                 if factor is not None:
                     row_has_data = True
                     factors.append(
@@ -403,14 +423,14 @@ def _extract_factors(
                 # Each disposal column produces a separate record
                 for disp_col in year_map.disposal_columns or []:
                     value = cells.get(disp_col.column_index)
-                    factor = _parse_numeric(value)
+                    pivot_name = (
+                        f"{emission_category_name}"
+                        f"{schema.descriptor_join_separator}"
+                        f"{disp_col.name}"
+                    )
+                    factor = _parse_factor(value, row_num, pivot_name, warnings)
                     if factor is not None:
                         row_has_data = True
-                        pivot_name = (
-                            f"{emission_category_name}"
-                            f"{schema.descriptor_join_separator}"
-                            f"{disp_col.name}"
-                        )
                         factors.append(
                             EmissionFactorRecord(
                                 year=year_map.year,
