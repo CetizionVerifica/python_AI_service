@@ -2,6 +2,9 @@
 import re
 import logging
 from typing import Optional
+
+from dateutil import parser as date_parser
+
 from app.schemas.invoice import InvoiceData
 
 logger = logging.getLogger(__name__)
@@ -12,6 +15,23 @@ DATE_PATTERN = re.compile(r"(?:Invoice|Order|Due)\s*Date[:\s]*(\d{1,2}[/-]\d{1,2
 TOTAL_PATTERN = re.compile(r"(?:Total|Amount|Payable|Due).*?([£$€]?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?)", re.IGNORECASE)
 INVOICE_NO_PATTERN = re.compile(r"(?:Invoice|Order)\s*(?:#|No\.?|Number)[:\s]*([A-Z0-9\-]+)", re.IGNORECASE)
 VENDOR_PATTERN = re.compile(r"^([A-Z0-9\s&\.,]+)(?:\r?\n)", re.MULTILINE) # Rough guess: First line? Often inaccurate but better than nothing for some layouts.
+
+def _iso_date(raw: str) -> Optional[str]:
+    """
+    A bill date as YYYY-MM-DD, or None when it can't be read for certain.
+
+    invoice_date is promised as YYYY-MM-DD; the raw "03/04/25" form would be
+    compared as text by the period check and could pass it. Day-first, as on
+    the Indian bills this service reads (03/04/2025 = 3 April).
+    """
+    try:
+        parsed = date_parser.parse(raw.strip(), dayfirst=True)
+    except (ValueError, OverflowError):
+        return None
+    if not 1990 <= parsed.year <= 2100:
+        return None
+    return parsed.date().isoformat()
+
 
 def extract_fallback_data(text: str) -> InvoiceData:
     """
@@ -37,7 +57,7 @@ def extract_fallback_data(text: str) -> InvoiceData:
     # 2. Date
     date_match = DATE_PATTERN.search(text)
     if date_match:
-        data.invoice_date = date_match.group(1)
+        data.invoice_date = _iso_date(date_match.group(1))
 
     # 3. Invoice Number
     inv_match = INVOICE_NO_PATTERN.search(text)
