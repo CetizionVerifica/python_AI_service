@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from app.services.excel_parser import (
+    ImportConflict,
     get_unique_categories,
     get_preview_rows,
     import_all_rows,
@@ -223,6 +224,8 @@ def bulk_import(payload: dict, principal: Principal = Depends(require_user)):
         return res
     except HTTPException:
         raise
+    except ImportConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

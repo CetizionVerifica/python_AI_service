@@ -64,7 +64,10 @@ def stub_storage(monkeypatch):
 
 
 def test_bulk_import_results(throwaway_db, stub_storage, snapshot):
+    from app.core.database import ensure_uploaded_documents_table
     from app.services import excel_parser as ep
+
+    ensure_uploaded_documents_table()
 
     with throwaway_db.cursor() as cur:
         # FERA (category 28) factor so the auto-FERA row path runs too.
@@ -74,26 +77,34 @@ def test_bulk_import_results(throwaway_db, stub_storage, snapshot):
             "VALUES (1, 28, 2024, 610.0000, 'litre', 'CI', 'Diesel')"
         )
         cur.execute("DELETE FROM emission")  # this test owns the table in the throwaway DB
+        # import_all_rows claims the uploaded document before reading it.
+        # Explicit ids, removed again below: other tests count this table.
+        cur.execute(
+            "INSERT INTO uploaded_documents (id, document_name, cloudinary_url) "
+            "VALUES (901, 'a.csv', 'stub'), (902, 'b.csv', 'stub'), (903, 'c.csv', 'stub')"
+        )
 
     summaries = []
-    for doc_id, imp in enumerate(IMPORTS, start=1):
+    for doc_id, imp in enumerate(IMPORTS, start=901):
         stub_storage[doc_id] = imp["csv"]
         result = ep.import_all_rows(
             document_id=doc_id, mappings=imp["mappings"], selected_categories=[],
             site_id=imp["site_id"], category_id=imp["category_id"],
             date_of_reporting="2025-06-30", user_id=1,
         )
-        summaries.append({"name": imp["name"], "inserted": result["inserted"], "skipped": result["skipped"], "total_rows": result["total_rows"]})
+        summaries.append({k: result[k] for k in ("inserted", "fera_inserted", "skipped", "skipped_rows", "not_selected", "total_rows")} | {"name": imp["name"]})
 
     with throwaway_db.cursor() as cur:
         cur.execute("""
             SELECT site_id, category_id, to_char(date_of_reporting, 'YYYY-MM-DD'),
                    total_emission::text, unit, activity_data_unit, status::text,
-                   activity_data, emission_factor_snapshot
+                   activity_data, emission_factor_snapshot,
+                   fera_linked_id IS NOT NULL
               FROM emission ORDER BY pk_id
         """)
-        cols = ["site_id", "category_id", "date", "total_emission", "unit", "activity_data_unit", "status", "activity_data", "factor"]
+        cols = ["site_id", "category_id", "date", "total_emission", "unit", "activity_data_unit", "status", "activity_data", "factor", "fera_linked"]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.execute("DELETE FROM uploaded_documents WHERE id IN (901, 902, 903)")
 
     snapshot("bulk_import", {"imports": summaries, "stored_emissions": rows})
 
@@ -103,12 +114,19 @@ def test_bulk_import_lists_skipped_rows(throwaway_db, stub_storage):
     from app.services import excel_parser as ep
 
     imp = IMPORTS[1]
-    stub_storage[99] = imp["csv"]
-    result = ep.import_all_rows(
-        document_id=99, mappings=imp["mappings"], selected_categories=[],
-        site_id=imp["site_id"], category_id=imp["category_id"],
-        date_of_reporting="2025-06-30", user_id=1,
-    )
+    stub_storage[904] = imp["csv"]
+    # import_all_rows claims the uploaded document before reading it.
+    with throwaway_db.cursor() as cur:
+        cur.execute("INSERT INTO uploaded_documents (id, document_name, cloudinary_url) VALUES (904, 'd.csv', 'stub')")
+    try:
+        result = ep.import_all_rows(
+            document_id=904, mappings=imp["mappings"], selected_categories=[],
+            site_id=imp["site_id"], category_id=imp["category_id"],
+            date_of_reporting="2025-06-30", user_id=1,
+        )
+    finally:
+        with throwaway_db.cursor() as cur:
+            cur.execute("DELETE FROM uploaded_documents WHERE id = 904")
 
     assert result["skipped"] == 3
     assert [r["row"] for r in result["skipped_rows"]] == [3, 4, 5]

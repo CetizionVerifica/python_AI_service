@@ -25,9 +25,12 @@ from app.core.database import (
     get_uploaded_document_by_id,
     update_uploaded_document,
     list_documents_for_cleanup,
-    fetch_emission_factor,
     bulk_insert_emissions_with_conn,
+    link_fera_rows_with_conn,
     fetch_column_config,
+    claim_uploaded_document_for_import,
+    mark_document_imported_with_conn,
+    release_import_claim,
 )
 from app.core import cloudinary_service
 
@@ -1246,7 +1249,9 @@ def get_preview_rows(
                             activity_unit = _normalize_unit_key(activity_unit)  # canonical spelling
                     else:
                         activity_value = _extract_activity_value(activity_data)
-                    if activity_value > 0:
+                    if row_error is None and activity_value <= 0:
+                        row_error = "Missing or zero activity value"
+                    if row_error is None:
                         if units_match_exact(denominator_unit, activity_unit):
                             total_emission = round((activity_value * factor_value) / 1000.0, 2)
                         else:
@@ -1254,17 +1259,12 @@ def get_preview_rows(
                             if conv:
                                 total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
                             else:
-                                if calc_spec:
-                                    row_error = f"No unit conversion from '{activity_unit}' to '{denominator_unit}'"
+                                row_error = f"No unit conversion from '{activity_unit}' to '{denominator_unit}'"
                                 logger.warning(
                                     f"No unit conversion for '{activity_unit}' → '{denominator_unit}' "
                                     f"(category='{emission_category}')"
                                 )
-                                if calc_spec and not row_error:
-                                    row_error = (
-                                        f"No unit conversion from '{activity_unit}' to '{denominator_unit}'"
-                                    )
-                elif calc_spec:
+                else:
                     # Mirrors import_all_rows: these rows are skipped there, so
                     # the preview has to say why rather than showing a bare 0.
                     row_error = (
@@ -1272,7 +1272,7 @@ def get_preview_rows(
                         if not factor_index
                         else f"No emission factor found for '{emission_category}' (year {row_year})"
                     )
-            elif calc_spec:
+            else:
                 row_error = "Missing emission category"
 
             row_out = dict(activity_data)
@@ -1283,8 +1283,8 @@ def get_preview_rows(
             row_out["unit"] = "tCO2e"
             row_out[_DATE_FIELD] = row_date
             if row_error:
-                # Spec categories: says exactly which field is missing/invalid;
-                # import will SKIP this row rather than save a wrong total.
+                # Says exactly why; import will SKIP this row rather than save
+                # a zero or wrong total.
                 row_out["row_error"] = row_error
 
             out.append(row_out)
@@ -1459,36 +1459,6 @@ def _extract_activity_value(activity_data: dict) -> float:
     return 0.0
 
 
-def _calc_emission(conn, site_id: int, category_id: int, activity_data: dict, activity_unit: str | None, date_of_reporting: str) -> float:
-    emission_category = (activity_data.get("emission_category") or "").strip()
-    if not emission_category:
-        return 0.0
-
-    # reportingYear - 1 (same as Node)
-    year = int(date_of_reporting[:4]) - 1
-
-    ef = fetch_emission_factor(conn, site_id, category_id, year, emission_category)
-    if not ef:
-        return 0.0
-
-    factor_value = float(ef["factor_value"])
-    denom_unit = ef.get("denominator_unit")
-
-    activity_value = _extract_activity_value(activity_data)
-    if activity_value <= 0:
-        return 0.0
-
-    if units_match_exact(denom_unit, activity_unit):
-        return round((activity_value * factor_value) / 1000.0, 2)
-
-    conv = get_conversion_factor(activity_unit or "", denom_unit or "")
-    if not conv:
-        return 0.0
-
-    converted = activity_value * float(conv)
-    return round((converted * factor_value) / 1000.0, 2)
-
-
 # Statuses that mean the stored file is gone on purpose. download_document_bytes
 # uses these to explain *why* a document can no longer be read.
 CONSUMED_STATUSES = {"imported", "deleted"}
@@ -1544,6 +1514,11 @@ def cleanup_old_documents(older_than_days: int = 7, limit: int = 500) -> int:
     logger.info(f"cleanup_old_documents: processed {len(docs)} document(s)")
     return len(docs)
 
+class ImportConflict(ValueError):
+    """The document is being imported, or was imported already (HTTP 409)."""
+
+
+# Cap on per-row skip reasons returned to the caller; the count is always exact.
 SKIPPED_ROWS_LIMIT = 1000
 
 
@@ -1560,6 +1535,38 @@ def import_all_rows(
     import uuid
     upload_batch_id = str(uuid.uuid4())
 
+    # Claim the document before reading it, so the same file can't be imported
+    # twice (double click, retry, parallel request). Released on failure.
+    claimed, status = claim_uploaded_document_for_import(document_id)
+    if not claimed:
+        if status is None:
+            raise ValueError("Invalid document_id")
+        if status == "importing":
+            raise ImportConflict("This file is already being imported.")
+        raise ImportConflict(
+            "This file has already been imported. Please re-upload it to import again."
+        )
+    try:
+        return _import_claimed_document(
+            document_id, mappings, selected_categories, site_id, category_id,
+            date_of_reporting, chunk_size, user_id, upload_batch_id,
+        )
+    except BaseException:
+        release_import_claim(document_id)
+        raise
+
+
+def _import_claimed_document(
+    document_id: int,
+    mappings: dict[str, str],
+    selected_categories: list[str],
+    site_id: int,
+    category_id: int,
+    date_of_reporting: str,
+    chunk_size: int,
+    user_id: int | None,
+    upload_batch_id: str,
+) -> dict:
     content, ext = download_document_bytes(document_id)
     df = _read_df_from_bytes(content, ext)
     mapped_df = map_df(df, mappings)
@@ -1581,8 +1588,11 @@ def import_all_rows(
     # with a wrong or zero total.
     calc_spec = _load_calculation_spec(site_id, category_id)
 
+    not_selected = total_rows - len(mapped_df)
+
     conn = get_connection()
     inserted = 0
+    fera_inserted = 0
     skipped = 0
     # Which rows were skipped and why, so the upload screen can hand them back
     # as a file to fix. Capped: a sheet where every row fails needs one reason,
@@ -1601,9 +1611,29 @@ def import_all_rows(
     if category_id in FERA_TRIGGER_CATEGORIES:
         fera_factor_index = _load_factor_index(conn, site_id, FERA_CATEGORY_ID)
 
+    def flush(rows: list[dict]) -> None:
+        # Source rows first, then their FERA rows pointing back at them, then
+        # the source rows pointing at their FERA row (both directions, as the
+        # Node backend links a form entry and its FERA row).
+        nonlocal inserted, fera_inserted
+        if not rows:
+            return
+        source_ids = bulk_insert_emissions_with_conn(conn, rows, returning=True)
+        inserted += len(source_ids)
+        fera_rows = []
+        for source_id, r in zip(source_ids, rows):
+            fera = r.get("_fera_row")
+            if fera:
+                fera_rows.append({**fera, "fera_linked_id": source_id})
+        if fera_rows:
+            fera_ids = bulk_insert_emissions_with_conn(conn, fera_rows, returning=True)
+            fera_inserted += len(fera_ids)
+            link_fera_rows_with_conn(
+                conn, [(f["fera_linked_id"], fid) for f, fid in zip(fera_rows, fera_ids)]
+            )
+
     try:
         rows_buffer: list[dict] = []
-        fera_rows_buffer: list[dict] = []
 
         for row_index, row in mapped_df.iterrows():
             activity_data = row.to_dict()
@@ -1646,37 +1676,38 @@ def import_all_rows(
                             activity_data["activity_value"] = str(activity_value)
                     else:
                         activity_value = _extract_activity_value(activity_data)
-                    if activity_value <= 0:
+                    if row_error is not None:
                         total_emission = 0.0
+                    elif activity_value <= 0:
+                        total_emission = 0.0
+                        row_error = "Missing or zero activity value"
                     elif units_match_exact(denom_unit, activity_unit):
                         total_emission = round((activity_value * factor_value) / 1000.0, 2)
                     else:
                         conv = get_conversion_factor(activity_unit or "", denom_unit or "")
                         if not conv:
                             total_emission = 0.0
-                            if calc_spec:
-                                row_error = f"No unit conversion from '{activity_unit}' to '{denom_unit}'"
+                            row_error = f"No unit conversion from '{activity_unit}' to '{denom_unit}'"
                         else:
                             total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
                 else:
                     total_emission = 0.0
-                    if calc_spec:
-                        row_error = f"No emission factor found for '{emission_category}' (year {row_year})"
+                    row_error = f"No emission factor found for '{emission_category}' (year {row_year})"
             else:
-                if calc_spec:
-                    total_emission = 0.0
-                    row_error = "Missing emission category" if not emission_category else "No emission factors loaded"
-                else:
-                    total_emission = _calc_emission(conn, site_id, category_id, activity_data, activity_unit, row_date)
+                total_emission = 0.0
+                row_error = (
+                    "Missing emission category" if not emission_category
+                    else "No emission factors loaded for this category"
+                )
 
-            # Spec categories never save an uncomputable row — a zero or
-            # one-field total would look plausible and poison the reports.
-            # (Legacy categories keep their existing insert-with-zero behavior.)
-            # Keyed on row_error, not on total_emission: every uncomputable path
-            # above sets one, while total_emission is already rounded to 2 dp, so
-            # testing it would also discard any legitimate row under 0.005 tCO2e.
-            if calc_spec and row_error:
-                logger.warning(f"Bulk import skipped a row (spec category): {row_error}")
+            # An uncomputable row is never saved: a zero or one-field total
+            # would look plausible and poison the reports. It is reported back
+            # with its reason instead. Keyed on row_error, not on
+            # total_emission: every uncomputable path above sets one, while
+            # total_emission is already rounded to 2 dp, so testing it would
+            # also discard any legitimate row under 0.005 tCO2e.
+            if row_error:
+                logger.warning(f"Bulk import skipped a row: {row_error}")
                 skipped += 1
                 if len(skipped_rows) < SKIPPED_ROWS_LIMIT:
                     skipped_rows.append({
@@ -1699,8 +1730,7 @@ def import_all_rows(
                     "year": matched_ef.get("year"),
                 }
 
-            rows_buffer.append(
-                {
+            source_row = {
                     "site_id": site_id,
                     "category_id": category_id,
                     "activity_data": activity_data,
@@ -1712,8 +1742,8 @@ def import_all_rows(
                     "upload_batch_id": upload_batch_id,
                     "emission_factor_snapshot": ef_snapshot,
                     "created_by": user_id,
-                }
-            )
+            }
+            rows_buffer.append(source_row)
 
             # Auto-create FERA emission row if applicable
             if fera_factor_index and emission_category:
@@ -1744,7 +1774,7 @@ def import_all_rows(
                                 "source": fera_matched.get("source"),
                                 "year": fera_matched.get("year"),
                             }
-                            fera_rows_buffer.append(
+                            source_row["_fera_row"] = (
                                 {
                                     "site_id": site_id,
                                     "category_id": FERA_CATEGORY_ID,
@@ -1761,26 +1791,29 @@ def import_all_rows(
                             )
 
             if len(rows_buffer) >= chunk_size:
-                inserted += bulk_insert_emissions_with_conn(conn, rows_buffer)
+                flush(rows_buffer)
                 rows_buffer = []
-            if len(fera_rows_buffer) >= chunk_size:
-                inserted += bulk_insert_emissions_with_conn(conn, fera_rows_buffer)
-                fera_rows_buffer = []
 
-        if rows_buffer:
-            inserted += bulk_insert_emissions_with_conn(conn, rows_buffer)
-        if fera_rows_buffer:
-            inserted += bulk_insert_emissions_with_conn(conn, fera_rows_buffer)
+        flush(rows_buffer)
 
+        # Same transaction as the rows: either both land or neither does. A
+        # parallel import of this document waits on the row lock here, then
+        # finds it 'imported' and rolls its rows back.
+        if not mark_document_imported_with_conn(conn, document_id):
+            raise ImportConflict("This file has already been imported.")
         conn.commit()
         # Rows are committed, so the spreadsheet is no longer needed. Removing it
         # here — rather than on a schedule — keeps nothing in storage that the
         # database does not already hold.
         delete_document_file(document_id, new_status="imported")
+        # inserted + skipped + not_selected == total_rows; FERA rows created
+        # alongside are counted separately so inserted never exceeds the sheet.
         return {
             "inserted": inserted,
+            "fera_inserted": fera_inserted,
             "skipped": skipped,
             "skipped_rows": skipped_rows,
+            "not_selected": not_selected,
             "total_rows": total_rows,
             "upload_batch_id": upload_batch_id if inserted > 0 else None,
         }
