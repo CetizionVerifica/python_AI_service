@@ -1006,6 +1006,89 @@ def bulk_insert_emissions_with_conn(conn, rows: list[dict], returning: bool = Fa
     return len(values)
 
 
+# Advisory-lock namespace for "imports into one site": two imports of different
+# files for the same site run one after the other, so both duplicate checks see
+# the other's rows.
+IMPORT_SITE_LOCK = 2027
+
+
+def lock_site_for_import_with_conn(conn, site_id: int) -> None:
+    """Held until the import's transaction ends."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (IMPORT_SITE_LOCK, site_id))
+
+
+def monthly_activity_on_with_conn(conn, site_id: int, category_id: int, day: str, exclude_batch: str) -> list[dict]:
+    """
+    activity_data of the monthly entries already saved for this site, category
+    and date, leaving out the rows of the import that is running.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT activity_data FROM {EMISSION_TABLE}
+            WHERE site_id = %s AND category_id = %s AND date_of_reporting = %s::date
+              AND reporting_period = 'monthly' AND upload_batch_id IS DISTINCT FROM %s
+            """,
+            (site_id, category_id, day, exclude_batch),
+        )
+        return [r[0] if isinstance(r[0], dict) else {} for r in cur.fetchall()]
+
+
+def yearly_covers_date_with_conn(conn, site_id: int, category_id: int, day: str) -> bool:
+    """
+    True when a yearly entry for this site and category covers the date (the
+    mode lock). Same window as ESG-lite's yearlyCoversDateSql: CY is the
+    calendar year of its period end, FY the twelve months ending on it.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT 1 FROM {EMISSION_TABLE} e
+            WHERE e.site_id = %(site)s AND e.category_id = %(cat)s AND e.reporting_period = 'yearly'
+              AND ((e.year_type = 'CY'
+                    AND EXTRACT(YEAR FROM e.date_of_reporting) = EXTRACT(YEAR FROM %(day)s::date))
+                OR (e.year_type = 'FY'
+                    AND %(day)s::date > e.date_of_reporting - INTERVAL '1 year'
+                    AND %(day)s::date <= e.date_of_reporting))
+            LIMIT 1
+            """,
+            {"site": site_id, "cat": category_id, "day": day},
+        )
+        return cur.fetchone() is not None
+
+
+def audit_imported_rows_with_conn(conn, rows: list[tuple[int, float]], user_id: int | None, reason: str) -> None:
+    """
+    One audit_log row per imported entry (pk_id, total), in the import's own
+    transaction. Skipped with a warning when ESG-lite's audit_log table is not
+    there yet.
+    """
+    if not rows:
+        return
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('audit_log') IS NOT NULL")
+        if not cur.fetchone()[0]:
+            logger.warning("audit_log table missing; bulk import not audited")
+            return
+        execute_values(
+            cur,
+            """
+            INSERT INTO audit_log (entity_type, entity_id, action, changed_fields, reason, changed_by)
+            VALUES %s
+            """,
+            [
+                (
+                    "emission", pk_id, "import",
+                    Json({"status": {"old": None, "new": "pending"}, "total_emission": {"old": None, "new": str(total)}}),
+                    reason, user_id,
+                )
+                for pk_id, total in rows
+            ],
+            page_size=2000,
+        )
+
+
 def link_fera_rows_with_conn(conn, pairs: list[tuple[int, int]]) -> None:
     """Point each source row at its auto-created FERA row: (source pk_id, FERA pk_id)."""
     if not pairs:

@@ -27,6 +27,10 @@ from app.core.database import (
     list_documents_for_cleanup,
     bulk_insert_emissions_with_conn,
     link_fera_rows_with_conn,
+    lock_site_for_import_with_conn,
+    monthly_activity_on_with_conn,
+    yearly_covers_date_with_conn,
+    audit_imported_rows_with_conn,
     fetch_column_config,
     claim_uploaded_document_for_import,
     mark_document_imported_with_conn,
@@ -1534,6 +1538,10 @@ def cleanup_old_documents(older_than_days: int = 7, limit: int = 500) -> int:
     logger.info(f"cleanup_old_documents: processed {len(docs)} document(s)")
     return len(docs)
 
+def _norm(value) -> str:
+    return str(value if value is not None else "").strip().lower()
+
+
 class ImportConflict(ValueError):
     """The document is being imported, or was imported already (HTTP 409)."""
 
@@ -1640,6 +1648,7 @@ def _import_claimed_document(
             return
         source_ids = bulk_insert_emissions_with_conn(conn, rows, returning=True)
         inserted += len(source_ids)
+        audited = [(pk, r["total_emission"]) for pk, r in zip(source_ids, rows)]
         fera_rows = []
         for source_id, r in zip(source_ids, rows):
             fera = r.get("_fera_row")
@@ -1651,8 +1660,37 @@ def _import_claimed_document(
             link_fera_rows_with_conn(
                 conn, [(f["fera_linked_id"], fid) for f, fid in zip(fera_rows, fera_ids)]
             )
+            audited += [(pk, f["total_emission"]) for pk, f in zip(fera_ids, fera_rows)]
+        # Every imported entry gets an audit row, as the form's changes do.
+        audit_imported_rows_with_conn(conn, audited, user_id, f"Bulk import (batch {upload_batch_id})")
+
+    # The same rules as saving one entry by hand: a month a yearly entry
+    # already covers is refused (mode lock), and so is an entry the site
+    # already has for that category, date and subcategory (duplicate). Looked
+    # up once per date; this import's own rows are left out, so a sheet with
+    # several rows for one fuel and month imports all of them.
+    existing_by_date: dict[str, list[dict]] = {}
+    yearly_cover: dict[tuple[int, str], bool] = {}
+
+    def covered_by_yearly(cat_id: int, day: str) -> bool:
+        if (cat_id, day) not in yearly_cover:
+            yearly_cover[(cat_id, day)] = yearly_covers_date_with_conn(conn, site_id, cat_id, day)
+        return yearly_cover[(cat_id, day)]
+
+    def duplicates_existing(day: str, activity_data: dict, emission_category: str) -> bool:
+        if day not in existing_by_date:
+            existing_by_date[day] = monthly_activity_on_with_conn(conn, site_id, category_id, day, upload_batch_id)
+        identity = (calc_spec or {}).get("identity_columns") or []
+        return any(
+            _norm(prev.get("emission_category")) == _norm(emission_category)
+            and all(_norm(prev.get(c)) == _norm(activity_data.get(c)) for c in identity)
+            for prev in existing_by_date[day]
+        )
 
     try:
+        # Imports into one site run one at a time, so two files covering the
+        # same month can't both pass the duplicate check.
+        lock_site_for_import_with_conn(conn, site_id)
         rows_buffer: list[dict] = []
 
         for row_index, row in mapped_df.iterrows():
@@ -1720,6 +1758,11 @@ def _import_claimed_document(
                     else "No emission factors loaded for this category"
                 )
 
+            if not row_error and covered_by_yearly(category_id, row_date):
+                row_error = f"A yearly entry already covers {row_date} for this category; delete it first or keep this category yearly"
+            elif not row_error and duplicates_existing(row_date, activity_data, emission_category):
+                row_error = f"An entry for '{emission_category}' on {row_date} already exists"
+
             # An uncomputable row is never saved: a zero or one-field total
             # would look plausible and poison the reports. It is reported back
             # with its reason instead. Keyed on row_error, not on
@@ -1771,7 +1814,9 @@ def _import_claimed_document(
                 resolved_fera = category_resolver.get(fera_key)
                 fera_lookup = resolved_fera.strip().lower() if resolved_fera else fera_key
                 fera_matched = _pick_factor(fera_factor_index, fera_lookup, row_year)
-                if fera_matched:
+                # FERA keeps its own mode lock: no monthly twin inside a
+                # yearly FERA entry (the form skips the twin the same way).
+                if fera_matched and not covered_by_yearly(FERA_CATEGORY_ID, row_date):
                     fera_factor_value = float(fera_matched.get("factor_value") or 0)
                     fera_denom_unit = fera_matched.get("denominator_unit")
                     fera_activity_value = _extract_activity_value(activity_data)

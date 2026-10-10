@@ -113,3 +113,88 @@ def test_failed_import_can_be_retried(doc, monkeypatch):
     monkeypatch.setattr(ep, "download_document_bytes", lambda doc_id: (CSV.encode(), "csv"))
     monkeypatch.setattr(ep, "delete_document_file", lambda *a, **k: None)
     assert run_import()["inserted"] == 1
+
+
+# P27-04: imported rows follow the form's rules (duplicate, mode lock, audit).
+
+@pytest.fixture
+def saved_entries(throwaway_db):
+    """Entries saved by hand before the import; removed afterwards."""
+    ids: list[int] = []
+
+    def add(category_id, day, period="monthly", year_type=None, emission_category="Diesel"):
+        with throwaway_db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO emission (activity_data, total_emission, unit, date_of_reporting, reporting_period, year_type, site_id, category_id, created_by) "
+                "VALUES (%s, 1, 'tCO2e', %s, %s, %s, 1, %s, 1) RETURNING pk_id",
+                (f'{{"emission_category": "{emission_category}", "activity_value": "5"}}', day, period, year_type, category_id),
+            )
+            ids.append(cur.fetchone()[0])
+
+    yield add
+    with throwaway_db.cursor() as cur:
+        cur.execute("DELETE FROM emission WHERE pk_id = ANY(%s)", (ids,))
+
+
+def diesel_reasons(result):
+    return [s["reason"] for s in result["skipped_rows"] if s["emission_category"] == "Diesel" and s["row"] == 1]
+
+
+def test_month_already_entered_is_skipped(doc, saved_entries):
+    saved_entries(1, "2025-06-30", emission_category=" diesel ")
+    result = run_import()
+    assert result["inserted"] == 0 and result["fera_inserted"] == 0
+    assert diesel_reasons(result) == ["An entry for 'Diesel' on 2025-06-30 already exists"]
+
+
+def test_other_fuel_same_month_still_imports(doc, saved_entries):
+    saved_entries(1, "2025-06-30", emission_category="Petrol")
+    assert run_import()["inserted"] == 1
+
+
+def test_month_inside_a_yearly_entry_is_skipped(doc, saved_entries):
+    saved_entries(1, "2025-12-31", period="yearly", year_type="CY")
+    result = run_import()
+    assert result["inserted"] == 0
+    assert diesel_reasons(result) == [
+        "A yearly entry already covers 2025-06-30 for this category; delete it first or keep this category yearly"
+    ]
+
+
+def test_fy_window_is_twelve_months_to_its_end(doc, saved_entries):
+    # FY ending Mar 2025 covers Apr 2024..Mar 2025, not June 2025.
+    saved_entries(1, "2025-03-31", period="yearly", year_type="FY")
+    assert run_import()["inserted"] == 1
+
+
+def test_yearly_fera_entry_skips_only_the_twin(doc, saved_entries):
+    saved_entries(28, "2025-12-31", period="yearly", year_type="CY")
+    result = run_import()
+    assert result["inserted"] == 1 and result["fera_inserted"] == 0
+
+
+def test_rows_of_one_sheet_are_not_duplicates_of_each_other(doc, monkeypatch):
+    from app.services import excel_parser as ep
+
+    sheet = "Fuel,Qty,Unit\nDiesel,1000,litre\nDiesel,500,litre\nDiesel,250,litre\n"
+    monkeypatch.setattr(ep, "download_document_bytes", lambda doc_id: (sheet.encode(), "csv"))
+    result = ep.import_all_rows(
+        document_id=DOC, mappings=MAPPINGS, selected_categories=[],
+        site_id=1, category_id=1, date_of_reporting="2025-06-30", user_id=1, chunk_size=1,
+    )
+    assert result["inserted"] == 3 and result["skipped"] == 0
+
+
+def test_every_imported_entry_is_audited(doc, throwaway_db):
+    result = run_import()
+    with throwaway_db.cursor() as cur:
+        cur.execute(
+            "SELECT e.pk_id, a.action, a.changed_by, a.changed_fields->'status'->>'new', a.reason "
+            "FROM emission e JOIN audit_log a ON a.entity_type = 'emission' AND a.entity_id = e.pk_id "
+            "WHERE e.upload_batch_id = %s ORDER BY e.pk_id",
+            (result["upload_batch_id"],),
+        )
+        rows = cur.fetchall()
+        cur.execute("DELETE FROM audit_log WHERE reason = %s", (f"Bulk import (batch {result['upload_batch_id']})",))
+    assert len(rows) == result["inserted"] + result["fera_inserted"] == 2
+    assert all(r[1:4] == ("import", 1, "pending") for r in rows)

@@ -122,11 +122,14 @@ def test_bulk_import_lists_skipped_rows(throwaway_db, stub_storage):
         result = ep.import_all_rows(
             document_id=904, mappings=imp["mappings"], selected_categories=[],
             site_id=imp["site_id"], category_id=imp["category_id"],
-            date_of_reporting="2025-06-30", user_id=1,
+            # Not June: the snapshot test above already saved this sheet's
+            # June rows, which would now be refused as duplicates.
+            date_of_reporting="2025-07-31", user_id=1,
         )
     finally:
         with throwaway_db.cursor() as cur:
             cur.execute("DELETE FROM uploaded_documents WHERE id = 904")
+            cur.execute("DELETE FROM emission WHERE date_of_reporting = '2025-07-31' AND upload_batch_id IS NOT NULL")
 
     assert result["skipped"] == 3
     assert [r["row"] for r in result["skipped_rows"]] == [3, 4, 5]
