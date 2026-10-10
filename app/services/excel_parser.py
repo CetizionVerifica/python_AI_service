@@ -1541,6 +1541,9 @@ def cleanup_old_documents(older_than_days: int = 7, limit: int = 500) -> int:
     logger.info(f"cleanup_old_documents: processed {len(docs)} document(s)")
     return len(docs)
 
+SKIPPED_ROWS_LIMIT = 1000
+
+
 def import_all_rows(
     document_id: int,
     mappings: dict[str, str],
@@ -1578,6 +1581,10 @@ def import_all_rows(
     conn = get_connection()
     inserted = 0
     skipped = 0
+    # Which rows were skipped and why, so the upload screen can hand them back
+    # as a file to fix. Capped: a sheet where every row fails needs one reason,
+    # not a response the size of the sheet.
+    skipped_rows: list[dict] = []
 
     default_year = _factor_year(date_of_reporting, 0)
     # Index every year up front so each row can use the factor matching its own
@@ -1595,7 +1602,7 @@ def import_all_rows(
         rows_buffer: list[dict] = []
         fera_rows_buffer: list[dict] = []
 
-        for _, row in mapped_df.iterrows():
+        for row_index, row in mapped_df.iterrows():
             activity_data = row.to_dict()
 
             # Separate extra_ prefixed fields into extra_data
@@ -1668,6 +1675,13 @@ def import_all_rows(
             if calc_spec and row_error:
                 logger.warning(f"Bulk import skipped a row (spec category): {row_error}")
                 skipped += 1
+                if len(skipped_rows) < SKIPPED_ROWS_LIMIT:
+                    skipped_rows.append({
+                        # 1 = the first data row under the header row.
+                        "row": int(row_index) + 1,
+                        "emission_category": emission_category or None,
+                        "reason": row_error,
+                    })
                 continue
 
             ef_snapshot = None
@@ -1760,7 +1774,13 @@ def import_all_rows(
         # here — rather than on a schedule — keeps nothing in storage that the
         # database does not already hold.
         delete_document_file(document_id, new_status="imported")
-        return {"inserted": inserted, "skipped": skipped, "total_rows": total_rows, "upload_batch_id": upload_batch_id if inserted > 0 else None}
+        return {
+            "inserted": inserted,
+            "skipped": skipped,
+            "skipped_rows": skipped_rows,
+            "total_rows": total_rows,
+            "upload_batch_id": upload_batch_id if inserted > 0 else None,
+        }
 
     except Exception:
         conn.rollback()
