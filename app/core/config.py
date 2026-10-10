@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
     DB_USERNAME: str = "postgres"
-    DB_PASSWORD: str = "postgres123"
+    # No default secret: set DB_PASSWORD in the environment. Empty only works
+    # for a passwordless local Postgres; otherwise the first query fails with
+    # a message naming DB_PASSWORD (app/core/database.py).
+    DB_PASSWORD: str = ""
     DB_NAME: str = "emissions_db"
 
     # Cloudinary

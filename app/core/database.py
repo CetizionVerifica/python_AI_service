@@ -20,15 +20,23 @@ _pool: _pg_pool.ThreadedConnectionPool | None = None
 def _get_pool() -> _pg_pool.ThreadedConnectionPool:
     global _pool
     if _pool is None or _pool.closed:
-        _pool = _pg_pool.ThreadedConnectionPool(
-            minconn=2,
-            maxconn=20,
-            host=settings.DB_HOST,
-            port=settings.DB_PORT,
-            user=settings.DB_USERNAME,
-            password=settings.DB_PASSWORD,
-            dbname=settings.DB_NAME,
-        )
+        try:
+            _pool = _pg_pool.ThreadedConnectionPool(
+                minconn=2,
+                maxconn=20,
+                host=settings.DB_HOST,
+                port=settings.DB_PORT,
+                user=settings.DB_USERNAME,
+                password=settings.DB_PASSWORD,
+                dbname=settings.DB_NAME,
+            )
+        except psycopg2.OperationalError as exc:
+            if not settings.DB_PASSWORD:
+                raise RuntimeError(
+                    "Could not connect to Postgres and DB_PASSWORD is not set. "
+                    "Set DB_PASSWORD (and DB_HOST/DB_USERNAME/DB_NAME) in the environment."
+                ) from exc
+            raise
     return _pool
 
 
