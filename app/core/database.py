@@ -142,13 +142,27 @@ def update_invoice_ocr(invoice_id: int, ocr_text: dict) -> dict:
         release_connection(conn)
 
 
-def get_invoices(site_id: int | None = None, category_id: int | None = None, uploaded_by: int | None = None) -> list:
-    """Get all invoices with optional filters."""
+def get_invoices(
+    site_id: int | None = None,
+    category_id: int | None = None,
+    uploaded_by: int | None = None,
+    *,
+    scope_site_ids: list[int] | None = None,
+    scope_user_id: int | None = None,
+) -> list:
+    """Get invoices with optional filters.
+
+    scope_site_ids limits the result to those sites plus the invoices without
+    a site that scope_user_id uploaded; None means no limit (Superadmin).
+    """
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             query = "SELECT * FROM invoice WHERE 1=1"
             params = []
+            if scope_site_ids is not None:
+                query += " AND (site_id = ANY(%s) OR (site_id IS NULL AND uploaded_by = %s))"
+                params.extend([list(scope_site_ids), scope_user_id])
             if site_id:
                 query += " AND site_id = %s"
                 params.append(site_id)
@@ -548,6 +562,10 @@ def ensure_uploaded_documents_table():
                 "CREATE INDEX IF NOT EXISTS idx_uploaded_documents_created_at ON uploaded_documents(created_at DESC);"
             )
 
+            # Who uploaded the document; the import wizard only lets that
+            # user (or a Superadmin) read it back. NULL on older rows.
+            cur.execute("ALTER TABLE uploaded_documents ADD COLUMN IF NOT EXISTS uploaded_by INTEGER;")
+
             conn.commit()
     except Exception as e:
         conn.rollback()
@@ -564,6 +582,7 @@ def insert_uploaded_document(
     public_url: str | None = None,
     file_type: str | None = None,
     file_size: int | None = None,
+    uploaded_by: int | None = None,
 ) -> dict:
     """
     Insert an uploaded document record and return the inserted row (includes id).
@@ -579,9 +598,10 @@ def insert_uploaded_document(
                     cloudinary_public_id,
                     public_url,
                     file_type,
-                    file_size
+                    file_size,
+                    uploaded_by
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -591,6 +611,7 @@ def insert_uploaded_document(
                     public_url,
                     file_type,
                     file_size,
+                    uploaded_by,
                 ),
             )
             row = cur.fetchone()

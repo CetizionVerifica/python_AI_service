@@ -12,6 +12,9 @@ import pytest
 
 # Settings() requires an OpenRouter key at import time; CI never calls the LLM.
 os.environ.setdefault("OPENROUTER_API_KEY", "ci-dummy-not-a-real-key")
+# Auth settings are required too; dummies, tests sign their own tokens.
+os.environ.setdefault("AUTH_JWT_SECRET", "ci-dummy-jwt-secret-not-a-real-secret-0123456789")
+os.environ.setdefault("AI_SERVICE_KEY", "ci-dummy-service-key-not-real")
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SNAPSHOT_DIR = ROOT / "ci" / "snapshots"
