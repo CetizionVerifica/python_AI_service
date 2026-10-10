@@ -1,6 +1,7 @@
 
 import json
 import logging
+import threading
 from typing import Any, Dict
 from openai import OpenAI
 from app.core.config import settings
@@ -11,10 +12,15 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 logger = logging.getLogger(__name__)
 
 
-# Configure OpenRouter client via OpenAI SDK
+# Configure OpenRouter client via OpenAI SDK. Every call is bounded by
+# LLM_TIMEOUT_S so a hung request can't hold a worker indefinitely; retries
+# are done once, by the tenacity decorator on _call_openrouter (MAX_RETRIES),
+# not again inside the SDK.
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=settings.OPENROUTER_API_KEY,
+    timeout=settings.LLM_TIMEOUT_S,
+    max_retries=0,
     default_headers={
         "HTTP-Referer": settings.OPENROUTER_REFERER,
         "X-Title": settings.OPENROUTER_TITLE,
@@ -27,6 +33,11 @@ MODEL_NAME = settings.OPENROUTER_MODEL
 
 class LLMError(RuntimeError):
     pass
+
+
+# At most MAX_CONCURRENT_LLM calls in flight per process; a caller waits up
+# to LLM_TIMEOUT_S for a slot, then gets an LLMError instead of queueing forever.
+_llm_slots = threading.BoundedSemaphore(max(1, settings.MAX_CONCURRENT_LLM))
 
 
 def _clean_json_text(text: str) -> str:
@@ -275,12 +286,16 @@ If there is only one activity per invoice, still return it inside the activities
 @retry(
     reraise=True,
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    stop=stop_after_attempt(3),
+    stop=stop_after_attempt(max(0, settings.MAX_RETRIES) + 1),
 )
 def _call_openrouter(messages: list[dict]) -> str:
     """
-    Calls OpenRouter via the OpenAI SDK with retry logic.
+    Calls OpenRouter via the OpenAI SDK with retry logic. Each attempt times
+    out after LLM_TIMEOUT_S.
     """
+    if not _llm_slots.acquire(timeout=settings.LLM_TIMEOUT_S):
+        logger.warning("OpenRouter call skipped: all LLM slots busy, retrying...")
+        raise LLMError("The AI service is busy. Please try again shortly.")
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
@@ -288,11 +303,14 @@ def _call_openrouter(messages: list[dict]) -> str:
             response_format={"type": "json_object"},
             temperature=0.1,
             max_tokens=13333,
+            timeout=settings.LLM_TIMEOUT_S,
         )
         return response.choices[0].message.content
     except Exception as e:
         logger.warning(f"OpenRouter call failed, retrying... Error: {e}")
         raise e
+    finally:
+        _llm_slots.release()
 
 
 def extract_structured_data(

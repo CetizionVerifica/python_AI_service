@@ -35,6 +35,7 @@ Server runs on `http://localhost:8000` by default.
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Cloudinary file storage |
 | `OPENROUTER_API_KEY` | OpenRouter API key for LLM |
 | `OPENROUTER_MODEL` | LLM model (default: `google/gemini-3-flash-preview`) |
+| `LLM_TIMEOUT_S`, `MAX_RETRIES`, `MAX_CONCURRENT_LLM` | Per-call LLM timeout in seconds (default 90), retries after a failed call (default 2), LLM calls in flight per process (default 3) |
 | `AUTH_JWT_SECRET` | **Required.** Must equal ESG-lite's `JWT_SECRET`; verifies the sign-in token browsers send. The service does not start without it |
 | `AI_SERVICE_KEY` | Shared key ESG-lite sends as `X-Service-Key` on its server-to-server calls. Empty disables those calls |
 
