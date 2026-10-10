@@ -28,7 +28,7 @@ from app.core.database import (
     bulk_insert_emissions_with_conn,
     link_fera_rows_with_conn,
     lock_site_for_import_with_conn,
-    monthly_activity_on_with_conn,
+    monthly_activity_in_month_with_conn,
     yearly_covers_date_with_conn,
     audit_imported_rows_with_conn,
     fetch_column_config,
@@ -1661,15 +1661,20 @@ def _import_claimed_document(
                 conn, [(f["fera_linked_id"], fid) for f, fid in zip(fera_rows, fera_ids)]
             )
             audited += [(pk, f["total_emission"]) for pk, f in zip(fera_ids, fera_rows)]
-        # Every imported entry gets an audit row, as the form's changes do.
+        # Every imported entry gets an audit row (action "import"), so its
+        # history shows it came from a sheet. Saving one entry by hand writes
+        # none; reviews and edits do.
         audit_imported_rows_with_conn(conn, audited, user_id, f"Bulk import (batch {upload_batch_id})")
 
     # The same rules as saving one entry by hand: a month a yearly entry
     # already covers is refused (mode lock), and so is an entry the site
-    # already has for that category, date and subcategory (duplicate). Looked
-    # up once per date; this import's own rows are left out, so a sheet with
+    # already has for that category, month and subcategory (duplicate). The
+    # form files a month on its last day, while a sheet row keeps its own day,
+    # so entries are matched by month. Subcategories compare case- and
+    # space-blind, slightly stricter than the form's exact match. Looked up
+    # once per month; this import's own rows are left out, so a sheet with
     # several rows for one fuel and month imports all of them.
-    existing_by_date: dict[str, list[dict]] = {}
+    existing_by_month: dict[str, list[dict]] = {}
     yearly_cover: dict[tuple[int, str], bool] = {}
 
     def covered_by_yearly(cat_id: int, day: str) -> bool:
@@ -1678,13 +1683,14 @@ def _import_claimed_document(
         return yearly_cover[(cat_id, day)]
 
     def duplicates_existing(day: str, activity_data: dict, emission_category: str) -> bool:
-        if day not in existing_by_date:
-            existing_by_date[day] = monthly_activity_on_with_conn(conn, site_id, category_id, day, upload_batch_id)
+        month = day[:7]
+        if month not in existing_by_month:
+            existing_by_month[month] = monthly_activity_in_month_with_conn(conn, site_id, category_id, day, upload_batch_id)
         identity = (calc_spec or {}).get("identity_columns") or []
         return any(
             _norm(prev.get("emission_category")) == _norm(emission_category)
             and all(_norm(prev.get(c)) == _norm(activity_data.get(c)) for c in identity)
-            for prev in existing_by_date[day]
+            for prev in existing_by_month[month]
         )
 
     try:
@@ -1761,7 +1767,7 @@ def _import_claimed_document(
             if not row_error and covered_by_yearly(category_id, row_date):
                 row_error = f"A yearly entry already covers {row_date} for this category; delete it first or keep this category yearly"
             elif not row_error and duplicates_existing(row_date, activity_data, emission_category):
-                row_error = f"An entry for '{emission_category}' on {row_date} already exists"
+                row_error = f"An entry for '{emission_category}' in {row_date[:7]} already exists"
 
             # An uncomputable row is never saved: a zero or one-field total
             # would look plausible and poison the reports. It is reported back

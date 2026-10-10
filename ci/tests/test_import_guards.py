@@ -144,7 +144,26 @@ def test_month_already_entered_is_skipped(doc, saved_entries):
     saved_entries(1, "2025-06-30", emission_category=" diesel ")
     result = run_import()
     assert result["inserted"] == 0 and result["fera_inserted"] == 0
-    assert diesel_reasons(result) == ["An entry for 'Diesel' on 2025-06-30 already exists"]
+    assert diesel_reasons(result) == ["An entry for 'Diesel' in 2025-06 already exists"]
+
+
+def test_dated_sheet_row_matches_a_hand_entry_in_its_month(doc, saved_entries, monkeypatch, throwaway_db):
+    # The form files June on the 30th; the sheet row says 15/06/2025.
+    from app.services import excel_parser as ep
+
+    saved_entries(1, "2025-06-30")
+    sheet = "Date,Fuel,Qty,Unit\n15/06/2025,Diesel,1000,litre\n15/07/2025,Diesel,1000,litre\n"
+    monkeypatch.setattr(ep, "download_document_bytes", lambda doc_id: (sheet.encode(), "csv"))
+    try:
+        result = ep.import_all_rows(
+            document_id=DOC, mappings={**MAPPINGS, "date_of_reporting": "Date"}, selected_categories=[],
+            site_id=1, category_id=1, date_of_reporting="2025-06-30", user_id=1,
+        )
+        assert result["inserted"] == 1 and result["skipped"] == 1
+        assert result["skipped_rows"][0]["reason"] == "An entry for 'Diesel' in 2025-06 already exists"
+    finally:
+        with throwaway_db.cursor() as cur:
+            cur.execute("DELETE FROM emission WHERE upload_batch_id IS NOT NULL AND date_of_reporting = '2025-07-15'")
 
 
 def test_other_fuel_same_month_still_imports(doc, saved_entries):

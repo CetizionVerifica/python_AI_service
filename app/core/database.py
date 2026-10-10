@@ -1018,16 +1018,19 @@ def lock_site_for_import_with_conn(conn, site_id: int) -> None:
         cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (IMPORT_SITE_LOCK, site_id))
 
 
-def monthly_activity_on_with_conn(conn, site_id: int, category_id: int, day: str, exclude_batch: str) -> list[dict]:
+def monthly_activity_in_month_with_conn(conn, site_id: int, category_id: int, day: str, exclude_batch: str) -> list[dict]:
     """
-    activity_data of the monthly entries already saved for this site, category
-    and date, leaving out the rows of the import that is running.
+    activity_data of the monthly entries already saved for this site and
+    category in the month of `day`, leaving out the rows of the import that is
+    running. Matched by month, not by date: the form files a month on its last
+    day, while a sheet row keeps the day written in it.
     """
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT activity_data FROM {EMISSION_TABLE}
-            WHERE site_id = %s AND category_id = %s AND date_of_reporting = %s::date
+            WHERE site_id = %s AND category_id = %s
+              AND date_trunc('month', date_of_reporting) = date_trunc('month', %s::date)
               AND reporting_period = 'monthly' AND upload_batch_id IS DISTINCT FROM %s
             """,
             (site_id, category_id, day, exclude_batch),
@@ -1060,8 +1063,9 @@ def yearly_covers_date_with_conn(conn, site_id: int, category_id: int, day: str)
 
 def audit_imported_rows_with_conn(conn, rows: list[tuple[int, float]], user_id: int | None, reason: str) -> None:
     """
-    One audit_log row per imported entry (pk_id, total), in the import's own
-    transaction. Skipped with a warning when ESG-lite's audit_log table is not
+    One audit_log row per imported entry (pk_id, total), action "import", in
+    the import's own transaction, so an entry's history shows where it came
+    from. Skipped with a warning when ESG-lite's audit_log table is not
     there yet.
     """
     if not rows:
@@ -1080,7 +1084,7 @@ def audit_imported_rows_with_conn(conn, rows: list[tuple[int, float]], user_id: 
             [
                 (
                     "emission", pk_id, "import",
-                    Json({"status": {"old": None, "new": "pending"}, "total_emission": {"old": None, "new": str(total)}}),
+                    Json({"status": {"old": None, "new": "pending"}, "total_emission": {"old": None, "new": f"{float(total):.2f}"}}),
                     reason, user_id,
                 )
                 for pk_id, total in rows
