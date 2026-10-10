@@ -51,6 +51,9 @@ def _seed(cur):
 def test_invoice_file_kept_while_linked(throwaway_db, monkeypatch):
     from app.api import invoices
     from app.core import cloudinary_service, database
+    from app.core.auth import Principal
+
+    superadmin = Principal(kind="user", user_id=1, role="Superadmin", site_ids=None)
 
     with throwaway_db.cursor() as cur:
         linked, free, linked2, free2 = _seed(cur)
@@ -61,13 +64,13 @@ def test_invoice_file_kept_while_linked(throwaway_db, monkeypatch):
     destroyed = []
     monkeypatch.setattr(cloudinary_service, "delete_file", lambda public_id: destroyed.append(public_id))
 
-    res = asyncio.run(invoices.delete_invoice(linked))
+    res = asyncio.run(invoices.delete_invoice(linked, superadmin))
     assert res["file_kept"] is True
-    res = asyncio.run(invoices.delete_invoice(free))
+    res = asyncio.run(invoices.delete_invoice(free, superadmin))
     assert res["file_kept"] is False
     assert destroyed == ["invoices/free"]
 
-    res = asyncio.run(invoices.bulk_delete_invoices(invoices.BulkDeleteRequest(ids=[linked2, free2])))
+    res = asyncio.run(invoices.bulk_delete_invoices(invoices.BulkDeleteRequest(ids=[linked2, free2]), superadmin))
     assert res["deleted"] == 2 and res["files_kept"] == 1
     assert destroyed == ["invoices/free", "invoices/free2"]
 
@@ -89,6 +92,9 @@ def test_delete_waits_for_a_link_in_progress(throwaway_db, monkeypatch):
 
     from app.api import invoices
     from app.core import cloudinary_service
+    from app.core.auth import Principal
+
+    superadmin = Principal(kind="user", user_id=1, role="Superadmin", site_ids=None)
 
     with throwaway_db.cursor() as cur:
         cur.execute(INVOICE_TABLE)
@@ -122,7 +128,7 @@ def test_delete_waits_for_a_link_in_progress(throwaway_db, monkeypatch):
             )
 
         result = {}
-        worker = threading.Thread(target=lambda: result.update(asyncio.run(invoices.delete_invoice(invoice_id))))
+        worker = threading.Thread(target=lambda: result.update(asyncio.run(invoices.delete_invoice(invoice_id, superadmin))))
         worker.start()
         worker.join(timeout=1.5)
         assert worker.is_alive(), "delete must wait for the link transaction"

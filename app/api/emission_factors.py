@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Optional, List
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services import storage
@@ -16,6 +16,7 @@ from app.schemas.emission_factor import (
     UpdateUploadResultsRequest,
 )
 from app.core import database, cloudinary_service
+from app.core.auth import Principal, require_superadmin
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,6 +31,7 @@ async def parse_emission_factor_file(
     db_categories: Optional[str] = Form(None),
     uploaded_by: Optional[int] = Form(None),
     sheet_name: Optional[str] = Form(None),
+    principal: Principal = Depends(require_superadmin),
 ):
     """
     Upload an emission factor Excel file and get structured, editable preview data.
@@ -110,7 +112,7 @@ async def parse_emission_factor_file(
                     cloudinary_url=cloud_result["secure_url"],
                     cloudinary_public_id=cloud_result["public_id"],
                     file_size=cloud_result.get("bytes"),
-                    uploaded_by=uploaded_by,
+                    uploaded_by=principal.user_id,  # never the client's value
                     layout_type=result.schema_detected.layout_type,
                     total_records=result.total_records,
                 )

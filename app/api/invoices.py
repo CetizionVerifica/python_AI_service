@@ -3,10 +3,11 @@ import asyncio
 import logging
 from typing import Optional, List
 import httpx
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Response
 from pydantic import BaseModel
 from app.services import storage, pipeline
 from app.core import database, cloudinary_service
+from app.core.auth import Principal, require_user
 from app.schemas.invoice import ExtractionResponse
 
 
@@ -17,6 +18,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_NOT_FOUND = HTTPException(status_code=404, detail="Invoice not found")
+
+
+def _visible_invoice(invoice_id: int, principal: Principal) -> dict:
+    """The invoice, or 404 when it is missing or outside the caller's sites."""
+    record = database.get_invoice_by_id(invoice_id)
+    if not record or not principal.can_access_record(record.get("site_id"), record.get("uploaded_by")):
+        raise _NOT_FOUND
+    return record
+
 
 @router.post("/invoices/upload", response_model=ExtractionResponse)
 async def upload_and_extract_invoice(
@@ -25,11 +36,14 @@ async def upload_and_extract_invoice(
     category_id: Optional[int] = Form(None),
     uploaded_by: Optional[int] = Form(None),
     unit_names: Optional[str] = Form(None),
+    principal: Principal = Depends(require_user),
 ):
     """
     Upload an Invoice (PDF/Image), store in Cloudinary + DB, and extract structured data.
     Cloudinary upload and the OCR/LLM pipeline run concurrently to minimise latency.
     """
+    # The uploader is whoever signed in, never what the client claims.
+    uploaded_by = principal.user_id
     filename = file.filename or "unknown"
     logger.info(f"Received upload request for file: {filename}")
     file_path = None
@@ -107,21 +121,31 @@ async def list_invoices(
     site_id: Optional[int] = Query(None),
     category_id: Optional[int] = Query(None),
     user_id: Optional[int] = Query(None),
+    principal: Principal = Depends(require_user),
 ):
-    """Get all invoices with optional filters."""
+    """Get the caller's invoices (their sites; Superadmin: all) with optional filters."""
     try:
-        invoices = database.get_invoices(site_id=site_id, category_id=category_id, uploaded_by=user_id)
+        invoices = database.get_invoices(
+            site_id=site_id,
+            category_id=category_id,
+            uploaded_by=user_id,
+            scope_site_ids=None if principal.site_ids is None else sorted(principal.site_ids),
+            scope_user_id=principal.user_id,
+        )
         return invoices
     except Exception as e:
         logger.error(f"Failed to list invoices: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/invoices/bulk")
-async def bulk_delete_invoices(body: BulkDeleteRequest):
+async def bulk_delete_invoices(body: BulkDeleteRequest, principal: Principal = Depends(require_user)):
     """Bulk delete invoices (DB + Cloudinary)."""
     ids = body.ids
     if not ids:
         raise HTTPException(status_code=400, detail="ids list is required")
+    # All or nothing: one invoice outside the caller's sites fails the request.
+    for invoice_id in set(ids):
+        _visible_invoice(invoice_id, principal)
 
     # The link check happens inside the delete transaction (rows locked).
     deleted = database.bulk_delete_invoices(ids)
@@ -141,17 +165,15 @@ async def bulk_delete_invoices(body: BulkDeleteRequest):
 
 
 @router.get("/invoices/{invoice_id}")
-async def get_invoice(invoice_id: int):
+async def get_invoice(invoice_id: int, principal: Principal = Depends(require_user)):
     """Get a single invoice by ID."""
-    invoice = database.get_invoice_by_id(invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    return invoice
+    return _visible_invoice(invoice_id, principal)
 
 
 @router.delete("/invoices/{invoice_id}")
-async def delete_invoice(invoice_id: int):
+async def delete_invoice(invoice_id: int, principal: Principal = Depends(require_user)):
     """Delete an invoice (DB + Cloudinary)."""
+    _visible_invoice(invoice_id, principal)
     # The link check happens inside the delete transaction (row locked).
     deleted = database.delete_invoice(invoice_id)
     if not deleted:
@@ -167,11 +189,9 @@ async def delete_invoice(invoice_id: int):
 
 
 @router.get("/invoices/{invoice_id}/serve")
-async def serve_invoice_file(invoice_id: int):
-    """Proxy-serve an invoice file from Cloudinary, bypassing any access restrictions."""
-    record = database.get_invoice_by_id(invoice_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Invoice not found")
+async def serve_invoice_file(invoice_id: int, principal: Principal = Depends(require_user)):
+    """Proxy-serve an invoice file from Cloudinary to a caller who may see it."""
+    record = _visible_invoice(invoice_id, principal)
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -212,6 +232,7 @@ async def extract_invoice(
     site_id: Optional[int] = Form(None),
     category_id: Optional[int] = Form(None),
     unit_names: Optional[str] = Form(None),
+    principal: Principal = Depends(require_user),
 ):
     """
     Extract structured data from an invoice.
@@ -223,9 +244,7 @@ async def extract_invoice(
 
     if invoice_id is not None:
         # Reuse path: look up record, download from Cloudinary, run pipeline
-        record = database.get_invoice_by_id(invoice_id)
-        if not record:
-            raise HTTPException(status_code=404, detail="Invoice not found")
+        record = _visible_invoice(invoice_id, principal)
         try:
             file_path = await storage.download_from_url(record["cloudinary_url"], record["file_name"])
         except Exception as e:

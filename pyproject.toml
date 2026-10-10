@@ -26,5 +26,5 @@ dependencies = [
     "tenacity",
     "uvicorn",
     "openpyxl>=3.1.0",
-    
+    "pyjwt>=2.15.1",
 ]

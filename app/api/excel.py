@@ -3,14 +3,15 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from app.services.excel_parser import (
     get_unique_categories,
     get_preview_rows,
     import_all_rows,
     read_headers_from_bytes,
 )
-from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document
+from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document, get_uploaded_document_by_id
+from app.core.auth import Principal, require_user
 from app.core import cloudinary_service
 from app.services import storage
 from app.core.config import settings
@@ -21,8 +22,20 @@ import io
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/excel", tags=["excel"])
 
+
+def _own_document(document_id, principal: Principal) -> int:
+    """The document id, or 404 unless the caller uploaded it (Superadmin: any)."""
+    try:
+        document_id = int(document_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="document_id must be a whole number")
+    doc = get_uploaded_document_by_id(document_id)
+    if not doc or not (principal.is_superadmin or doc.get("uploaded_by") == principal.user_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document_id
+
 @router.post("/upload")
-async def upload_excel(file: UploadFile = File(...)):
+async def upload_excel(file: UploadFile = File(...), principal: Principal = Depends(require_user)):
     allowed = {"xlsx", "xls", "csv"}
 
     filename = file.filename or ""
@@ -98,6 +111,7 @@ async def upload_excel(file: UploadFile = File(...)):
                 public_url=stored_url,
                 file_type=file.content_type,
                 file_size=len(contents),
+                uploaded_by=principal.user_id,
             )
         except Exception:
             # No row will ever point at the uploaded asset, and the cleanup job
@@ -132,9 +146,9 @@ async def upload_excel(file: UploadFile = File(...)):
 
 # ---- Step 2: unique categories BEFORE preview ----
 @router.post("/unique-categories")
-def unique_categories(payload: dict):
+def unique_categories(payload: dict, principal: Principal = Depends(require_user)):
+    document_id = _own_document(payload.get("document_id"), principal)
     try:
-        document_id = int(payload.get("document_id"))
         mappings = payload.get("mappings") or {}
         cats, total = get_unique_categories(document_id, mappings)
         return {"unique_categories": cats, "total_rows": total}
@@ -147,9 +161,10 @@ def unique_categories(payload: dict):
 
 
 @router.post("/preview")
-def preview(payload: dict):
+def preview(payload: dict, principal: Principal = Depends(require_user)):
+    # site_id is checked against the caller's sites by enforce_site_scope.
+    document_id = _own_document(payload.get("document_id"), principal)
     try:
-        document_id = int(payload.get("document_id"))
         mappings = payload.get("mappings") or {}
         selected_categories = payload.get("selected_categories") or []
         page = int(payload.get("page", 1))
@@ -181,17 +196,17 @@ def preview(payload: dict):
 
 # ---- Step 4: import all + calculate + save ----
 @router.post("/import")
-def bulk_import(payload: dict):
+def bulk_import(payload: dict, principal: Principal = Depends(require_user)):
+    # site_id is checked against the caller's sites by enforce_site_scope.
+    document_id = _own_document(payload.get("document_id"), principal)
     try:
-        document_id = int(payload.get("document_id"))
         mappings = payload.get("mappings") or {}
         selected_categories = payload.get("selected_categories") or []
         site_id = int(payload.get("site_id"))
         category_id = int(payload.get("category_id"))
         date_of_reporting = str(payload.get("date_of_reporting"))
-        user_id = payload.get("user_id")
-        if user_id is not None:
-            user_id = int(user_id)
+        # Rows are created by whoever signed in, never by a client-sent user_id.
+        user_id = principal.user_id
 
         res = import_all_rows(
             document_id=document_id,
