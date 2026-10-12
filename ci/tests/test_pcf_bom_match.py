@@ -196,6 +196,22 @@ def test_matches_by_name_group_geography_and_variant():
     assert r["unmatched_lines"] == 1
 
 
+def test_large_library_is_matched_in_bounded_time():
+    import time
+
+    library = [
+        {"material_factor_id": i, "name": f"{g} grade {i} {w}", "material_group": g, "unit": "kg", "geography": "Global", "source": "x", "source_year": 2023, "licence": "open", "recycled_variant": False}
+        for i, (g, w) in enumerate((g, w) for g in ("aluminium", "copper", "steel", "plastic", "packaging") for w in ("ingot", "billet", "wire", "sheet", "coil", "rod", "tube", "foil", "bar", "plate"))
+    ] * 100
+    library = [{**f, "material_factor_id": i} for i, f in enumerate(library)]
+    lines = [{"id": i, "name": f"Copper wire {i}", "unit": "kg"} for i in range(50)]
+    t = time.perf_counter()
+    r = pcf_match.match_factors(lines, library, call_llm=no_llm)
+    assert time.perf_counter() - t < 5
+    assert all(line["suggestions"][0]["confidence"] >= 60 for line in r["lines"])
+    assert all("copper" in s["name"] for line in r["lines"] for s in line["suggestions"])
+
+
 def test_ai_picks_among_candidates_when_names_are_weak():
     calls = []
 
@@ -299,6 +315,9 @@ def test_parse_bom_refuses_bad_input(client, monkeypatch):
     h = bearer(MANAGER_A)
     assert client.post(BOM_URL, headers=h, **upload(mapping="{")).status_code == 422
     assert client.post(BOM_URL, headers=h, **upload(batch_units="0")).status_code == 422
+    for bad in ("nan", "inf", "-inf"):
+        assert client.post(BOM_URL, headers=h, **upload(batch_units=bad, keep_evidence="false")).status_code == 422, bad
+        assert client.post(BOM_URL, headers=h, **upload(mass_per_unit_kg=bad, keep_evidence="false")).status_code == 422, bad
     assert client.post(BOM_URL, headers=h, **upload(name="bom.docx")).status_code == 400
     assert client.post(BOM_URL, headers=h, **upload(content=b"", name="bom.csv")).status_code == 400
     r = client.post(BOM_URL, headers=h, **upload(content=b"%PDF-1.4", name="bom.pdf", keep_evidence="false"))

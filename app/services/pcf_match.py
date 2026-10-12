@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Any, Callable, Optional
 
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 from app.services.pcf_sheet import infer_group
 from app.services.pcf_units import PcfUnit, to_pcf_unit
@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 TOP = 3
 AI_BELOW = 60
 AI_CANDIDATES = 8
+# Factors fully scored per line: the closest names (two similarity measures)
+# plus every factor of the group the line's name implies. The rest of the
+# library can't score above a weak group-less match and is skipped, so a
+# request of many lines against a large library stays linear in both.
+NAME_CANDIDATES = 40
+NAME_CUTOFF = 20
 RECYCLED_WORDS = ("recycled", "secondary", "scrap", "post-consumer", "post consumer", "regrind")
 GEO_ALIASES: dict[str, tuple[str, ...]] = {
     "bahrain": ("bh", "bahrain", "gcc", "middle east", "me", "gulf"),
@@ -71,15 +77,32 @@ def _wants_recycled(line: dict[str, Any]) -> bool:
     return share >= 50 or any(w in name for w in RECYCLED_WORDS)
 
 
+class _LineCtx:
+    """What a line contributes to every score, worked out once per line, not per factor."""
+
+    __slots__ = ("line", "name", "group", "unit", "hint", "recycled")
+
+    def __init__(self, line: dict[str, Any], geography_hint: Optional[str]):
+        self.line = line
+        self.name = _norm(line.get("name"))
+        self.group = line.get("material_group") or (infer_group(str(line.get("name") or "")) or (None,))[0]
+        self.unit = to_pcf_unit(line["unit"]) if line.get("unit") else None
+        self.hint = geography_hint or line.get("origin_country")
+        self.recycled = _wants_recycled(line)
+
+
 def score(line: dict[str, Any], factor: dict[str, Any], geography_hint: Optional[str]) -> tuple[int, str]:
     """(confidence 0–90, reason) for one line against one factor."""
-    name = _norm(line.get("name"))
-    fname = _norm(factor.get("name"))
-    sim = max(fuzz.token_set_ratio(name, fname), fuzz.partial_ratio(name, fname) * 0.9)
+    return _score(_LineCtx(line, geography_hint), factor, _norm(factor.get("name")))
+
+
+def _score(ctx: _LineCtx, factor: dict[str, Any], fname: str) -> tuple[int, str]:
+    line = ctx.line
+    sim = max(fuzz.token_set_ratio(ctx.name, fname), fuzz.partial_ratio(ctx.name, fname) * 0.9)
     conf = sim * 0.7  # a perfect name alone is 70
     why: list[str] = [f"“{line.get('name')}” → {factor.get('name')}"]
 
-    line_group = line.get("material_group") or (infer_group(str(line.get("name") or "")) or (None,))[0]
+    line_group = ctx.group
     if line_group and factor.get("material_group"):
         if line_group == factor["material_group"]:
             conf += 12
@@ -90,7 +113,7 @@ def score(line: dict[str, Any], factor: dict[str, Any], geography_hint: Optional
 
     unit = line.get("unit")
     if unit and factor.get("unit"):
-        u = to_pcf_unit(unit)
+        u = ctx.unit
         if isinstance(u, PcfUnit) and u.unit == factor["unit"]:
             conf += 8
         elif isinstance(u, PcfUnit) and {u.unit, factor["unit"]} <= {"kg", "t"}:
@@ -99,7 +122,7 @@ def score(line: dict[str, Any], factor: dict[str, Any], geography_hint: Optional
             conf -= 15
             why.append(f"unit {factor['unit']} differs from {unit}")
 
-    hint = geography_hint or line.get("origin_country")
+    hint = ctx.hint
     if hint and factor.get("geography"):
         if _geo_match(hint, factor["geography"]):
             conf += 10
@@ -111,7 +134,7 @@ def score(line: dict[str, Any], factor: dict[str, Any], geography_hint: Optional
         why.append(f"{factor['geography']} dataset")
 
     recycled = bool(factor.get("recycled_variant"))
-    if recycled != _wants_recycled(line):
+    if recycled != ctx.recycled:
         conf -= 20 if recycled else 5
         why.append("recycled variant" if recycled else "primary variant")
 
@@ -155,8 +178,18 @@ def match_factors(
 ) -> dict[str, Any]:
     results = []
     ai_used = False
+    fnames = [_norm(f.get("name")) for f in factors]
+    by_group: dict[str, list[int]] = {}
+    for i, f in enumerate(factors):
+        if f.get("material_group"):
+            by_group.setdefault(str(f["material_group"]), []).append(i)
     for line in lines:
-        scored = sorted(((*score(line, f, geography_hint), f) for f in factors), key=lambda t: -t[0])
+        ctx = _LineCtx(line, geography_hint)
+        picked: set[int] = set(by_group.get(str(ctx.group), ())) if ctx.group else set()
+        if fnames:
+            for scorer in (fuzz.token_set_ratio, fuzz.partial_ratio):
+                picked.update(i for _, _, i in process.extract(ctx.name, fnames, scorer=scorer, limit=NAME_CANDIDATES, score_cutoff=NAME_CUTOFF))
+        scored = sorted(((*_score(ctx, factors[i], fnames[i]), factors[i]) for i in sorted(picked)), key=lambda t: -t[0])
         suggestions = [
             {"material_factor_id": f["material_factor_id"], "name": f.get("name"), "confidence": c, "reason": r, "by": "rule"}
             for c, r, f in scored[:top]

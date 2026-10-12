@@ -6,6 +6,7 @@ Callers: Managers and Superadmins, the roles ESG-lite lets use /pcf/*.
 import asyncio
 import json
 import logging
+import math
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -166,8 +167,10 @@ async def parse_bom(
             raise HTTPException(status_code=422, detail="mapping must be JSON")
         if not isinstance(override, dict) or not all(v is None or isinstance(v, str) for v in override.values()):
             raise HTTPException(status_code=422, detail='mapping must look like {"name": "Material"}')
-    if batch_units <= 0:
-        raise HTTPException(status_code=422, detail="batch_units must be above zero")
+    if not math.isfinite(batch_units) or batch_units <= 0:
+        raise HTTPException(status_code=422, detail="batch_units must be a number above zero")
+    if mass_per_unit_kg is not None and (not math.isfinite(mass_per_unit_kg) or mass_per_unit_kg < 0):
+        raise HTTPException(status_code=422, detail="mass_per_unit_kg must be a number of zero or more")
     loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(

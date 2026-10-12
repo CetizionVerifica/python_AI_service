@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -305,8 +306,10 @@ def read_bom(
     extract_text: Optional[Callable[[bytes, str], str]] = None,
 ) -> dict[str, Any]:
     """The BOM as PcfInput-shaped lines. ``batch_units`` is how many declared units the sheet's quantities cover."""
-    if batch_units <= 0:
-        raise SheetError("The batch size must be above zero.")
+    if not math.isfinite(batch_units) or batch_units <= 0:
+        raise SheetError("The batch size must be a number above zero.")
+    if mass_per_unit_kg is not None and not math.isfinite(mass_per_unit_kg):
+        mass_per_unit_kg = None
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     warnings: list[str] = []
     ai_used = False
