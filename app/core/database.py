@@ -633,6 +633,73 @@ def insert_uploaded_document(
         release_connection(conn)
 
 
+def ensure_pcf_evidence_table():
+    """
+    Creates the pcf_evidence table (once): the raw BOM and declaration files
+    the PCF AI assist read, kept as evidence. Call this on FastAPI startup.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pcf_evidence (
+                    id BIGSERIAL PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    document_name TEXT NOT NULL,
+                    stored_url TEXT NOT NULL,
+                    cloudinary_public_id TEXT,
+                    file_type TEXT,
+                    file_size BIGINT,
+                    pcf_study_id INTEGER,
+                    uploaded_by INTEGER,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_pcf_evidence_study ON pcf_evidence(pcf_study_id);")
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB ensure_pcf_evidence_table failed: {e}")
+        raise
+    finally:
+        release_connection(conn)
+
+
+def insert_pcf_evidence(
+    kind: str,
+    document_name: str,
+    stored_url: str,
+    cloudinary_public_id: str | None,
+    file_type: str | None,
+    file_size: int | None,
+    pcf_study_id: int | None,
+    uploaded_by: int | None,
+) -> dict:
+    """Insert one evidence row and return it (includes id)."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO pcf_evidence (kind, document_name, stored_url, cloudinary_public_id, file_type, file_size, pcf_study_id, uploaded_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (kind, document_name, stored_url, cloudinary_public_id, file_type, file_size, pcf_study_id, uploaded_by),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row)
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB insert_pcf_evidence failed: {e}")
+        raise
+    finally:
+        release_connection(conn)
+
+
 def get_uploaded_document_by_id(document_id: int) -> dict | None:
     """
     Fetch a single uploaded document by id.
