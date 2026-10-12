@@ -700,6 +700,18 @@ def update_uploaded_document(
 IMPORT_CLAIM_STALE_MINUTES = 30
 
 
+def company_id_for_site(site_id: int) -> int | None:
+    """The client a site belongs to; a Superadmin's bulk upload names it on the plan (IM11)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT company_id FROM site WHERE site_id = %s", (int(site_id),))
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+    finally:
+        release_connection(conn)
+
+
 def claim_uploaded_document_for_import(document_id: int) -> tuple[bool, str | None]:
     """
     Atomically mark a document 'importing' so a second import of the same file
