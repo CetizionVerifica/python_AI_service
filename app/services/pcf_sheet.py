@@ -90,6 +90,8 @@ class SheetError(ValueError):
     """The file can't be read as a factor sheet; the message is for people."""
 
 
+
+
 def norm(header: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(header or "").lower().replace("₂", "2"))
 
@@ -107,7 +109,7 @@ class Grid:
     rows: list[list[Any]]  # every row, values as read
 
 
-def read_grid(content: bytes, filename: str, sheet_name: Optional[str] = None) -> Grid:
+def read_grid(content: bytes, filename: str, sheet_name: Optional[str] = None, layout: Optional["Layout"] = None) -> Grid:
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if ext == "csv":
         text = content.decode("utf-8-sig", errors="replace")
@@ -132,7 +134,7 @@ def read_grid(content: bytes, filename: str, sheet_name: Optional[str] = None) -
     if sheet_name:
         return Grid(names, sheet_name, grids[sheet_name])
     # The first sheet whose best header row names the required columns; else the first with data.
-    best = max(names, key=lambda n: (_header_score(grids[n])[1], -names.index(n)))
+    best = max(names, key=lambda n: (_header_score(grids[n], layout)[1], -names.index(n)))
     return Grid(names, best, grids[best])
 
 
@@ -140,15 +142,16 @@ def _blank(v: Any) -> bool:
     return v is None or (isinstance(v, str) and not v.strip())
 
 
-def _header_score(rows: list[list[Any]]) -> tuple[int, float]:
+def _header_score(rows: list[list[Any]], layout: Optional["Layout"] = None) -> tuple[int, float]:
     """(0-based header row, score). Score: required fields named, then other fields, then text cells."""
+    layout = layout or FACTOR_LAYOUT
     best_row, best = 0, -1.0
     for i, row in enumerate(rows[:HEADER_SCAN_ROWS]):
         texts = [clean_header(c) for c in row if isinstance(c, str) and c.strip()]
         if len(texts) < 2:
             continue
-        mapping = match_headers(texts)
-        score = sum(10 for f in NEEDS_A_COLUMN if f in mapping) + len(mapping) + len(texts) * 0.01
+        mapping = match_headers(texts, layout)
+        score = sum(10 for f in layout.needs if f in mapping) + len(mapping) + len(texts) * 0.01
         if score > best:
             best_row, best = i, score
     return best_row, max(best, 0.0)
@@ -164,12 +167,28 @@ class ColumnMatch:
     by: str  # "header" | "ai" | "person"
 
 
-def match_headers(headers: list[str]) -> dict[str, ColumnMatch]:
+@dataclass(frozen=True)
+class Layout:
+    """Which fields a sheet is read into: the factor sheet here, the BOM in pcf_bom."""
+
+    fields: tuple[tuple[str, str, bool], ...]  # (field, label, required), in matching order
+    synonyms: dict[str, list[str]]
+    needs: tuple[str, ...]  # fields that must come from a column
+    # A header naming CO2e or GWP is the value column (factor sheets only).
+    co2e_field: Optional[str] = None
+
+
+FACTOR_LAYOUT = Layout(tuple(FIELDS), SYNONYMS, NEEDS_A_COLUMN, co2e_field="value_kgco2e")
+
+
+def match_headers(headers: list[str], layout: Optional[Layout] = None) -> dict[str, ColumnMatch]:
     """Header → field: exact names and synonyms first, then a header containing one, then a close spelling.
 
     Each pass runs over every field before the next, so “Material group” goes to
     the group (exact) before the name (contains “material”) can take it.
     """
+    layout = layout or FACTOR_LAYOUT
+    FIELDS, SYNONYMS = layout.fields, layout.synonyms  # noqa: N806
     out: dict[str, ColumnMatch] = {}
     keyed = [(h, norm(h)) for h in headers if norm(h)]
 
@@ -187,7 +206,7 @@ def match_headers(headers: list[str]) -> dict[str, ColumnMatch]:
         hit = next(((h, s) for h, n in free() for s in SYNONYMS[f] if (len(s) >= 5 and s in n) or (len(s) == 4 and n.endswith(s))), None)
         if hit:
             out[f] = ColumnMatch(hit[0], 80, f"Header “{hit[0]}” contains “{hit[1]}”", "header")
-        elif f == "value_kgco2e":
+        elif f == layout.co2e_field:
             # “GWP (t CO2e / t)”, “CO2-eq”: a header naming CO2e or GWP is the value.
             hit = next((h for h, n in free() if "co2" in n or n.startswith("gwp")), None)
             if hit:
@@ -203,13 +222,15 @@ def match_headers(headers: list[str]) -> dict[str, ColumnMatch]:
 
 
 AI_MAPPING_PROMPT = """\
-You map spreadsheet columns to the fields of a product-carbon-footprint material factor.
+You map spreadsheet columns to the fields of {what}.
 Fields: {fields}.
 The sheet's headers and a few rows follow as JSON. Return ONLY a JSON object:
 {{"mapping": {{"<field>": {{"header": "<exact header>", "confidence": <0-100>, "reason": "<one short sentence>"}}}}}}
 Use only headers that exist, at most once each. Leave out a field you can't place.
-value_kgco2e is the numeric emission factor (kg, g or t of CO2e per unit of the material); never a year, a quantity or a price.
+{hint}
 """
+
+FACTOR_AI_HINT = "value_kgco2e is the numeric emission factor (kg, g or t of CO2e per unit of the material); never a year, a quantity or a price."
 
 
 def ai_mapping(
@@ -217,12 +238,16 @@ def ai_mapping(
     sample: list[dict[str, Any]],
     missing: list[str],
     call_llm: Callable[[list[dict]], str],
+    labels: Optional[dict[str, str]] = None,
+    what: str = "a product-carbon-footprint material factor",
+    hint: str = FACTOR_AI_HINT,
 ) -> dict[str, ColumnMatch]:
     from app.services.llm import _parse_json_object
 
-    fields = ", ".join(f"{f} ({FIELD_LABEL[f]})" for f in missing)
+    labels = labels or FIELD_LABEL
+    fields = ", ".join(f"{f} ({labels[f]})" for f in missing)
     messages = [
-        {"role": "system", "content": AI_MAPPING_PROMPT.format(fields=fields)},
+        {"role": "system", "content": AI_MAPPING_PROMPT.format(what=what, fields=fields, hint=hint)},
         {"role": "user", "content": json.dumps({"headers": headers, "rows": sample}, default=str)[:12000]},
     ]
     data = _parse_json_object(call_llm(messages))
@@ -443,15 +468,30 @@ def _json_safe(v: Any) -> Any:
     return v
 
 
-def read_factor_sheet(
+@dataclass
+class Table:
+    grid: Grid
+    header_idx: int
+    headers: list[str]
+    data: list[tuple[int, dict[str, Any]]]  # (Excel row number, header → cell)
+    mapping: dict[str, ColumnMatch]
+    warnings: list[str]
+
+    def __iter__(self):
+        return iter((self.grid, self.header_idx, self.headers, self.data, self.mapping, self.warnings))
+
+
+def read_table(
     content: bytes,
     filename: str,
-    sheet_name: Optional[str] = None,
+    sheet_name: Optional[str],
+    layout: Layout,
     mapping_override: Optional[dict[str, Optional[str]]] = None,
-    call_llm: Optional[Callable[[list[dict]], str]] = None,
-) -> dict[str, Any]:
-    grid = read_grid(content, filename, sheet_name)
-    header_idx, _ = _header_score(grid.rows)
+) -> Table:
+    """The sheet as header → cell rows, with columns matched to the layout's fields."""
+    labels = {f: label for f, label, _ in layout.fields}
+    grid = read_grid(content, filename, sheet_name, layout)
+    header_idx, _ = _header_score(grid.rows, layout)
     if not grid.rows or header_idx >= len(grid.rows):
         raise SheetError("The sheet is empty.")
     header_cells = grid.rows[header_idx]
@@ -472,10 +512,10 @@ def read_factor_sheet(
         raise SheetError(f"The sheet has {len(data)} rows; read at most {MAX_ROWS} at a time.")
 
     warnings: list[str] = []
-    mapping = match_headers(headers)
+    mapping = match_headers(headers, layout)
     if mapping_override is not None:
         for f, h in mapping_override.items():
-            if f not in FIELD_LABEL:
+            if f not in labels:
                 continue
             if h is None or h == "":
                 mapping.pop(f, None)
@@ -485,7 +525,19 @@ def read_factor_sheet(
                     mapping.pop(other)
                 mapping[f] = ColumnMatch(h, 100, f"You picked “{h}”", "person")
             else:
-                warnings.append(f"The sheet has no column “{h}”; {FIELD_LABEL[f]} was left unmatched")
+                warnings.append(f"The sheet has no column “{h}”; {labels[f]} was left unmatched")
+    return Table(grid, header_idx, headers, data, mapping, warnings)
+
+
+def read_factor_sheet(
+    content: bytes,
+    filename: str,
+    sheet_name: Optional[str] = None,
+    mapping_override: Optional[dict[str, Optional[str]]] = None,
+    call_llm: Optional[Callable[[list[dict]], str]] = None,
+) -> dict[str, Any]:
+    table = read_table(content, filename, sheet_name, FACTOR_LAYOUT, mapping_override)
+    grid, header_idx, headers, data, mapping, warnings = table
 
     ai_used = False
     missing = [f for f in NEEDS_A_COLUMN if f not in mapping]
