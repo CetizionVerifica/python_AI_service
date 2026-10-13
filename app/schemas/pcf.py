@@ -125,3 +125,29 @@ class MatchResponse(BaseModel):
     total_lines: int
     unmatched_lines: int
     ai_used: bool
+
+
+class DeclarationField(BaseModel):
+    value: Optional[Any] = Field(None, description="null when the document doesn't say")
+    confidence: int = Field(..., ge=0, le=100)
+    reason: str
+    by: Literal["pact", "ai", "rule"]
+
+
+class DeclarationResponse(BaseModel):
+    """A supplier PCF/EPD read for C06 review. Values are per one declared unit
+    (kg, t, m2, kWh, tonne.km or unit); dates are ISO YYYY-MM-DD."""
+
+    file_name: str
+    kind: Literal["pact", "pdf"]
+    fields: dict[str, DeclarationField] = Field(
+        ...,
+        description="product_name, supplier_name, declared_unit, value_kgco2e, boundary, standard, gwp_set, reference_start, reference_end, valid_from, valid_to, verifier",
+    )
+    boundary_mismatch: bool = Field(..., description="The boundary differs from expected_boundary; the figure must not be accepted as it is")
+    unit_mismatch: bool
+    low_confidence_fields: list[str]
+    warnings: list[str]
+    problems: list[str] = Field(..., description="What stops the figure from being used (no value, no unit)")
+    ai_used: bool
+    evidence: Optional[BomEvidence] = Field(None, description="The raw file kept as evidence; null when it couldn't be stored")
