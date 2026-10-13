@@ -13,8 +13,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.core.auth import Principal, SUPERADMIN, require_user
 from app.core.config import settings
-from app.schemas.pcf import BomResponse, FactorSheetResponse, MatchRequest, MatchResponse
-from app.services import pcf_bom, pcf_match, pcf_sheet
+from app.schemas.pcf import BomResponse, DeclarationResponse, FactorSheetResponse, MatchRequest, MatchResponse
+from app.services import pcf_bom, pcf_declaration, pcf_match, pcf_sheet
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pcf", tags=["pcf"])
@@ -102,8 +102,10 @@ def _extract_text(content: bytes, filename: str) -> str:
             pass
 
 
-def _store_evidence(content: bytes, filename: str, content_type: Optional[str], study_id: Optional[int], user_id: Optional[int]) -> Optional[dict]:
-    """Keep the raw BOM as evidence (Cloudinary when configured, else this instance's temp dir)."""
+def _store_evidence(
+    content: bytes, filename: str, content_type: Optional[str], study_id: Optional[int], user_id: Optional[int], kind: str = "bom"
+) -> Optional[dict]:
+    """Keep the raw BOM or declaration as evidence (Cloudinary when configured, else this instance's temp dir)."""
     import uuid
     from pathlib import Path
 
@@ -122,7 +124,7 @@ def _store_evidence(content: bytes, filename: str, content_type: Optional[str], 
     else:
         logger.warning("Cloudinary is not configured; PCF evidence %s stays on this instance only", filename)
     try:
-        row = insert_pcf_evidence("bom", filename, stored_url, public_id, content_type, len(content), study_id, user_id)
+        row = insert_pcf_evidence(kind, filename, stored_url, public_id, content_type, len(content), study_id, user_id)
     except Exception:
         logger.warning("Couldn't record PCF evidence for %s", filename, exc_info=True)
         if public_id:
@@ -208,4 +210,52 @@ async def match_factors(body: MatchRequest, principal: Principal = Depends(requi
         None, lambda: pcf_match.match_factors(lines, factors, body.geography_hint, call_llm=_llm)
     )
     logger.info("PCF factors matched by user %s: %s lines, %s unmatched, ai=%s", principal.user_id, result["total_lines"], result["unmatched_lines"], result["ai_used"])
+    return result
+
+
+@router.post("/parse-declaration", response_model=DeclarationResponse)
+async def parse_declaration(
+    file: UploadFile = File(...),
+    expected_boundary: Optional[str] = Form("cradle_to_gate", description="The footprint's boundary; another boundary in the file is flagged"),
+    expected_unit: Optional[str] = Form(None, description="The input's unit (kg, t, m2, kWh, tonne.km, unit); a per-tonne figure is converted to per kg and vice versa"),
+    study_id: Optional[int] = Form(None, description="PcfStudy the evidence belongs to, when known"),
+    keep_evidence: bool = Form(True),
+    principal: Principal = Depends(require_pcf_role),
+):
+    """A supplier's PCF/EPD (.pdf) or PACT product footprint (.json) → the fields C06 reviews (phase 3).
+
+    Declared unit, kgCO₂e per declared unit, boundary, standard, GWP set,
+    reference period, validity and verifier, each with a confidence and a
+    reason. A PACT file is read without the AI; a PDF goes through OCR and
+    the AI. A boundary other than `expected_boundary` sets
+    `boundary_mismatch`, so the figure is never accepted silently. The raw
+    file is kept as evidence. Nothing is saved to the request: the Manager
+    reviews and accepts in ESGLite.
+    """
+    content, filename = await _read_upload(file, (".pdf", ".json"))
+    if expected_boundary is not None and expected_boundary not in pcf_declaration.BOUNDARIES:
+        raise HTTPException(status_code=422, detail=f"expected_boundary must be one of {', '.join(pcf_declaration.BOUNDARIES)}")
+    if expected_unit is not None and expected_unit not in pcf_declaration.PCF_UNITS:
+        raise HTTPException(status_code=422, detail=f"expected_unit must be one of {', '.join(pcf_declaration.PCF_UNITS)}")
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: pcf_declaration.read_declaration(
+                content, filename, expected_boundary, expected_unit, call_llm=_llm, extract_text=_extract_text
+            ),
+        )
+    except pcf_declaration.DeclarationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    result["evidence"] = (
+        await loop.run_in_executor(
+            None, lambda: _store_evidence(content, filename, file.content_type, study_id, principal.user_id, kind="declaration")
+        )
+        if keep_evidence
+        else None
+    )
+    logger.info(
+        "PCF declaration read by user %s: kind=%s, %s problems, boundary_mismatch=%s, ai=%s, evidence=%s",
+        principal.user_id, result["kind"], len(result["problems"]), result["boundary_mismatch"], result["ai_used"], (result["evidence"] or {}).get("id"),
+    )
     return result
