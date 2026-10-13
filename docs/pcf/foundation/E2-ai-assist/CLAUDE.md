@@ -17,3 +17,9 @@
 ## Acceptance
 - On 3 sample BOM files (supplied in phase 0) ≥ 90% of lines parsed with correct qty and unit.
 - Every suggestion returns `reason` text the UI can show.
+
+## Built (C06 1/5, phase 3)
+- `POST /v1/pcf/parse-declaration` (`app/api/pcf.py`, `app/services/pcf_declaration.py`): multipart `file` (.pdf or PACT .json), `expected_boundary` (default `cradle_to_gate`), `expected_unit`, `study_id`, `keep_evidence`. Returns `fields` (product_name, supplier_name, declared_unit, value_kgco2e per declared unit, boundary, standard, gwp_set, reference_start/end, valid_from/to, verifier), each `{value, confidence, reason, by: pact|ai|rule}`, plus `boundary_mismatch`, `unit_mismatch`, `low_confidence_fields`, `warnings`, `problems`, `ai_used`, `evidence`.
+- A PACT 2.x/3.x file is read without the AI (confidence 100 for fields the file states; 70 for PACT defaults such as the cradle-to-gate boundary and the three-year validity). A PDF goes through the invoice OCR path and the AI, capped at confidence 85; a failed AI read is a 422, never a guess.
+- A per-tonne figure for a per-kg input (or the reverse) is converted and said so in the reason; any other unit difference is `unit_mismatch`. A boundary other than `expected_boundary` sets `boundary_mismatch` with a warning, so C06 can refuse to accept it silently.
+- The raw file is kept in `pcf_evidence` with kind `declaration`.
