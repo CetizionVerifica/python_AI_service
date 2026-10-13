@@ -65,6 +65,14 @@ _STANDARDS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+def _add_years(d: date, years: int) -> date:
+    """The same day `years` later; 29 Feb lands on 28 Feb when the target year has none."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, day=28)
+
+
 class DeclarationError(Exception):
     """The file can't be read as a declaration; the message is for the person."""
 
@@ -255,7 +263,7 @@ def _read_pact(data: dict[str, Any]) -> tuple[dict[str, Field], list[str], list[
             f[key] = Field(iso, 100, f"{src} {pact_key}", "pact")
     if f["valid_to"].value is None and f["reference_end"].value:
         end = date.fromisoformat(f["reference_end"].value)
-        f["valid_to"] = Field(date(end.year + 3, end.month, end.day).isoformat(), 70, "PACT default validity: three years after the reference period end", "pact")
+        f["valid_to"] = Field(_add_years(end, 3).isoformat(), 70, "PACT default validity: three years after the reference period end", "pact")
 
     assurance = pcf.get("assurance")
     if isinstance(assurance, dict):
@@ -314,6 +322,9 @@ def _read_text(text: str, call_llm: Callable[[list[dict]], str]) -> tuple[dict[s
         data = _parse_json_object(call_llm(messages))
     except LLMError as e:
         raise DeclarationError(f"The AI couldn't read the document: {e}")
+    except Exception as e:  # SDK, network or parsing failures are the caller's 422, not a 500
+        logger.warning("Declaration read failed: %s: %s", type(e).__name__, e)
+        raise DeclarationError("The AI couldn't read the document; try again or type the values.")
     if not isinstance(data, dict):
         raise DeclarationError("The AI couldn't find a declaration in the document.")
 

@@ -302,3 +302,22 @@ def test_parse_declaration_reads_a_pdf_and_validates_inputs(client):
     assert client.post(URL, headers=bearer(MANAGER_A), **upload(expected_unit="pcs", keep_evidence="false")).status_code == 422
     r = client.post(URL, headers=bearer(MANAGER_A), **upload(expected_boundary="cradle_to_grave", keep_evidence="false"))
     assert r.status_code == 200 and r.json()["boundary_mismatch"] is True
+
+
+def test_pact_default_validity_survives_a_leap_day_reference_end():
+    pact = dict(PACT_3)
+    pact["pcf"] = dict(PACT_3["pcf"], referencePeriodEnd="2024-02-29T00:00:00Z")
+    pact.pop("validityPeriodEnd", None)
+    r = decl.read_declaration(as_json(pact), "leap.json", "cradle_to_gate", "kg", call_llm=no_llm)
+    assert r["fields"]["valid_to"]["value"] == "2027-02-28"
+    assert r["fields"]["valid_to"]["confidence"] == 70
+
+
+def test_a_failing_llm_call_is_a_declaration_error_not_a_crash():
+    def boom(_messages):
+        raise RuntimeError("connection reset")
+
+    with pytest.raises(decl.DeclarationError):
+        decl.read_declaration(b"%PDF", "epd.pdf", "cradle_to_gate", "kg", call_llm=boom, extract_text=lambda c, n: "some text")
+    with pytest.raises(decl.DeclarationError):
+        decl.read_declaration(b"%PDF", "epd.pdf", "cradle_to_gate", "kg", call_llm=lambda m: None, extract_text=lambda c, n: "some text")
