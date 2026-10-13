@@ -2,7 +2,6 @@ import io
 import logging
 import os
 import re
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -20,21 +19,9 @@ from app.schemas.emission_factor import (
     ColumnHeader,
 )
 from app.core.database import (
-    get_connection,
-    release_connection,
     get_uploaded_document_by_id,
     update_uploaded_document,
     list_documents_for_cleanup,
-    bulk_insert_emissions_with_conn,
-    link_fera_rows_with_conn,
-    lock_site_for_import_with_conn,
-    monthly_activity_in_month_with_conn,
-    yearly_covers_date_with_conn,
-    audit_imported_rows_with_conn,
-    fetch_column_config,
-    claim_uploaded_document_for_import,
-    mark_document_imported_with_conn,
-    release_import_claim,
 )
 from app.core import cloudinary_service
 
@@ -112,6 +99,35 @@ def _normalise_unit(raw: str) -> str:
             text = m.group(1).strip()
     lower = text.lower()
     return _UNIT_ALIASES.get(lower, lower)
+
+
+# Physical unit conversions, kept for the PCF unit reader (``pcf_units``), which
+# needs to know how a sheet's "lb", "MWh" or "kg.km" scales to a PCF unit. The
+# bulk-upload path no longer converts anything here: ESG-lite's engine does
+# that when it plans the rows (IM11).
+UNIT_CONVERSIONS = {
+    "litre": {"gallon": 0.264172, "ml": 1000, "cubic meter": 0.001, "kilo litre": 0.001, "kl": 0.001},
+    "kl": {"litre": 1000, "gallon": 264.172, "ml": 1000000, "cubic meter": 1},
+    "kilo litre": {"litre": 1000, "gallon": 264.172, "ml": 1000000, "cubic meter": 1},
+    "gallon": {"litre": 3.78541, "ml": 3785.41, "cubic meter": 0.00378541, "kl": 0.00378541},
+    "ml": {"litre": 0.001, "gallon": 0.000264172, "kl": 0.000001},
+    "cubic meter": {"litre": 1000, "gallon": 264.172, "kl": 1},
+    # Weight
+    "kg": {"lb": 2.20462, "tonne": 0.001, "g": 1000, "ton": 0.00110231},
+    "lb": {"kg": 0.453592, "tonne": 0.000453592, "g": 453.592},
+    "ton": {"kg": 907.185, "lb": 2000, "g": 907185},
+    "tonne": {"kg": 1000, "lb": 2204.62, "g": 1000000},
+    "g": {"kg": 0.001, "lb": 0.00220462},
+    # Freight (weight-distance), the Node backend's table
+    "tonne.km": {"kg.km": 1000, "g.km": 1000000},
+    "kg.km": {"tonne.km": 0.001, "g.km": 1000},
+    "g.km": {"tonne.km": 0.000001, "kg.km": 0.001},
+    # Energy
+    "kwh": {"mwh": 0.001, "gj": 0.0036, "mj": 3.6},
+    "mwh": {"kwh": 1000, "gj": 3.6, "mj": 3600},
+    "gj": {"kwh": 277.778, "mwh": 0.277778, "mj": 1000},
+    "mj": {"kwh": 0.277778, "gj": 0.001},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -757,104 +773,6 @@ def _cache_delete(document_id: int) -> None:
     _file_cache.pop(document_id, None)
 
 
-UNIT_CONVERSIONS = {
-    "litre": {"gallon": 0.264172, "ml": 1000, "cubic meter": 0.001, "kilo litre": 0.001, "kl": 0.001},
-    "kl": {"litre": 1000, "gallon": 264.172, "ml": 1000000, "cubic meter": 1},
-    "kilo litre": {"litre": 1000, "gallon": 264.172, "ml": 1000000, "cubic meter": 1},
-    "gallon": {"litre": 3.78541, "ml": 3785.41, "cubic meter": 0.00378541, "kl": 0.00378541},
-    "ml": {"litre": 0.001, "gallon": 0.000264172, "kl": 0.000001},
-    "cubic meter": {"litre": 1000, "gallon": 264.172, "kl": 1},
-
-    # Weight
-    "kg": {"lb": 2.20462, "tonne": 0.001, "g": 1000, "ton": 0.00110231},
-    "lb": {"kg": 0.453592, "tonne": 0.000453592, "g": 453.592},
-    "ton": {"kg": 907.185, "lb": 2000, "g": 907185},
-    "tonne": {"kg": 1000, "lb": 2204.62, "g": 1000000},
-    "g": {"kg": 0.001, "lb": 0.00220462},
-
-    # Freight (weight-distance) — mirrors the Node backend's table
-    "tonne.km": {"kg.km": 1000, "g.km": 1000000},
-    "kg.km": {"tonne.km": 0.001, "g.km": 1000},
-    "g.km": {"tonne.km": 0.000001, "kg.km": 0.001},
-
-    # Energy
-    "kwh": {"mwh": 0.001, "gj": 0.0036, "mj": 3.6},
-    "mwh": {"kwh": 1000, "gj": 3.6, "mj": 3600},
-    "gj": {"kwh": 277.778, "mwh": 0.277778, "mj": 1000},
-    "mj": {"kwh": 0.277778, "gj": 0.001},
-
-    # Currency — seed values only. Refreshed from live rates by _refresh_fx_rates()
-    # below; these are the fallback when the FX provider is unreachable.
-    "inr": {"usd": 1 / 95.77},
-    "usd": {"inr": 95.77, "eur": 0.86},
-    "eur": {"usd": 1 / 0.86},
-}
-
-# --- Live currency rates -----------------------------------------------------
-# Spend-based Scope 3 factors are quoted in kgCO2e/USD, so every non-USD spend
-# is converted first. A stale hardcoded rate silently biases every one of those
-# rows (at ₹83.5 vs a live ₹95.77 that was a ~15% over-report), so the table is
-# refreshed from live rates and only falls back to the seeds above on failure.
-_FX_TTL_SECONDS = 12 * 60 * 60
-_fx_last_refresh: float = 0.0
-_CURRENCY_UNITS = {"inr", "usd", "eur"}
-
-_FX_PROVIDERS = (
-    ("https://open.er-api.com/v6/latest/USD", lambda d: d.get("rates")),
-    ("https://api.frankfurter.app/latest?from=USD", lambda d: d.get("rates")),
-)
-
-
-def _fetch_usd_rates() -> dict | None:
-    for url, extract in _FX_PROVIDERS:
-        try:
-            resp = requests.get(url, timeout=8)
-            resp.raise_for_status()
-            rates = extract(resp.json()) or {}
-            if rates.get("INR"):
-                return rates
-        except Exception as e:
-            logger.warning(f"[fx] provider {url} failed: {e}")
-    return None
-
-
-def _refresh_fx_rates(force: bool = False) -> None:
-    """Refresh USD->INR/EUR in UNIT_CONVERSIONS. Safe to call often; TTL-guarded."""
-    global _fx_last_refresh
-    now = time.time()
-    if not force and (now - _fx_last_refresh) < _FX_TTL_SECONDS:
-        return
-
-    rates = _fetch_usd_rates()
-    if not rates:
-        # Keep whatever is already in the table rather than failing the import.
-        logger.warning("[fx] Could not refresh currency rates; keeping previous values.")
-        _fx_last_refresh = now  # don't hammer a down provider on every row
-        return
-
-    inr, eur = rates.get("INR"), rates.get("EUR")
-    if inr:
-        UNIT_CONVERSIONS["usd"]["inr"] = float(inr)
-        UNIT_CONVERSIONS["inr"]["usd"] = 1 / float(inr)  # exact inverse, no round-trip drift
-    if eur:
-        UNIT_CONVERSIONS["usd"]["eur"] = float(eur)
-        UNIT_CONVERSIONS["eur"]["usd"] = 1 / float(eur)
-    _fx_last_refresh = now
-    logger.info(f"[fx] rates refreshed: USD->INR={inr}, USD->EUR={eur}")
-
-
-def get_conversion_factor(from_unit: str, to_unit: str):
-    f = (from_unit or "").lower().strip()
-    t = (to_unit or "").lower().strip()
-    if f in _CURRENCY_UNITS or t in _CURRENCY_UNITS:
-        _refresh_fx_rates()
-    return UNIT_CONVERSIONS.get(f, {}).get(t)
-
-def units_match_exact(u1: str | None, u2: str | None) -> bool:
-    if not u1 or not u2:
-        return True
-    return u1.lower().strip() == u2.lower().strip()
-
 # ---------- Excel reading ----------
 # How many leading rows to consider as candidate header rows. Real client
 # workbooks often carry a title banner, a blank spacer, and sometimes a row of
@@ -1023,71 +941,6 @@ def download_document_bytes(document_id: int) -> tuple[bytes, str]:
         f"Temp file no longer exists at '{file_path}'. Please re-upload the file."
     )
 
-def _build_category_resolver(site_id: int, category_id: int) -> dict[str, str]:
-    """
-    Build a case-insensitive lookup from display category names (as they appear
-    in uploaded files) to emission_category_name (as stored in emission_factors).
-
-    Resolution order:
-      1. column_config.emission_category_mapping JSONB (pipe-separated keys)
-      2. Fallback: emission_category_mapping table (ECM) which stores
-         company_category_name → global_category_name per company/site/category.
-         Only the site's own company's rows: a site-less mapping of another
-         company must never resolve a name here.
-
-    Returns empty dict if no mapping source has data.
-    """
-    resolver: dict[str, str] = {}
-
-    # 1. Try column_config's emission_category_mapping JSONB
-    try:
-        config = fetch_column_config(site_id, category_id)
-        if config:
-            ecm = config.get("emission_category_mapping") or {}
-            for display_key, ef_name in ecm.items():
-                if display_key and ef_name:
-                    resolver[str(display_key).strip().lower()] = str(ef_name).strip()
-    except Exception as e:
-        logger.warning(f"Failed to load column_config for category resolver: {e}")
-
-    if resolver:
-        return resolver
-
-    # 2. Fallback: query emission_category_mapping table (ECM)
-    conn = get_connection()
-    try:
-        from psycopg2.extras import RealDictCursor
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT company_category_name, global_category_name
-                FROM emission_category_mapping
-                WHERE category_id = %s
-                  AND (site_id = %s OR site_id IS NULL)
-                  AND company_id = (SELECT company_id FROM site WHERE site_id = %s)
-                ORDER BY site_id DESC NULLS LAST
-                """,
-                (category_id, site_id, site_id),
-            )
-            for row in cur.fetchall():
-                key = (row["company_category_name"] or "").strip().lower()
-                val = (row["global_category_name"] or "").strip()
-                if key and val and key not in resolver:
-                    resolver[key] = val
-        if resolver:
-            logger.info(
-                f"Category resolver built from ECM table: "
-                f"site_id={site_id}, category_id={category_id}, "
-                f"{len(resolver)} mappings"
-            )
-    except Exception as e:
-        logger.warning(f"Failed to load ECM fallback for category resolver: {e}")
-    finally:
-        release_connection(conn)
-
-    return resolver
-
-
 # ---------- Per-row reporting dates ----------
 # A client export typically holds a full year of transactions with a real date on
 # every line. Mapping that column lets one upload land in the right month (and the
@@ -1124,54 +977,6 @@ def _row_reporting_date(activity_data: dict, fallback: str) -> str:
     return fallback
 
 
-def _factor_year(date_of_reporting: str, fallback_year: int) -> int:
-    """Emission factors lag the reporting year by one (year N uses N-1)."""
-    try:
-        return int(str(date_of_reporting)[:4]) - 1
-    except (TypeError, ValueError):
-        return fallback_year
-
-
-def _load_factor_index(conn, site_id: int, category_id: int) -> dict[str, list[dict]]:
-    """
-    All emission factors for (site, category), grouped by lowercased name,
-    newest year first. Indexing every year up front means each row can pick the
-    factor for its own year without another query.
-    """
-    index: dict[str, list[dict]] = {}
-    try:
-        from psycopg2.extras import RealDictCursor
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT emission_factor_id, emission_category_name, global_category_name,
-                       factor_value, denominator_unit, source, year
-                FROM emission_factors
-                WHERE site_id = %s AND category_id = %s
-                ORDER BY year DESC
-                """,
-                (site_id, category_id),
-            )
-            for row in cur.fetchall():
-                name = (row["emission_category_name"] or "").strip().lower()
-                if name:
-                    index.setdefault(name, []).append(row)
-    except Exception as e:
-        logger.warning(f"Failed to preload emission factors: {e}")
-    return index
-
-
-def _pick_factor(index: dict[str, list[dict]], name_key: str, year: int) -> dict | None:
-    """Exact year match if present, else the most recent year on file."""
-    rows = index.get(name_key)
-    if not rows:
-        return None
-    for r in rows:
-        if r["year"] == year:
-            return r
-    return rows[0]  # already sorted year DESC
-
-
 # ---------- Step 2: unique categories ----------
 def get_unique_categories(document_id: int, mappings: dict[str, str]) -> tuple[list[str], int]:
     content, ext = download_document_bytes(document_id)
@@ -1185,302 +990,6 @@ def get_unique_categories(document_id: int, mappings: dict[str, str]) -> tuple[l
         {str(x).strip() for x in mapped_df["emission_category"].tolist() if str(x).strip()}
     )
     return cats, len(mapped_df)
-
-
-def get_preview_rows(
-    document_id: int,
-    mappings: dict[str, str],
-    selected_categories: list[str],
-    page: int,
-    page_size: int,
-    site_id: int,
-    category_id: int,
-    date_of_reporting: str,
-) -> tuple[list[dict], int]:
-    content, ext = download_document_bytes(document_id)
-    df = _read_df_from_bytes(content, ext)
-    mapped_df = map_df(df, mappings)
-
-    if "emission_category" not in mapped_df.columns:
-        logger.warning(
-            f"'emission_category' column not found. Available columns: {mapped_df.columns.tolist()}"
-        )
-
-    if selected_categories:
-        selected = {c.strip() for c in selected_categories}
-        if "emission_category" in mapped_df.columns:
-            mapped_df = mapped_df[
-                mapped_df["emission_category"].astype(str).str.strip().isin(selected)
-            ]
-
-    total = len(mapped_df)  # count AFTER category filter for correct pagination
-
-    start = max(0, (page - 1) * page_size)
-    end = start + page_size
-    page_df = mapped_df.iloc[start:end]
-
-    # Resolve uploaded category names → EF names via column_config mapping
-    category_resolver = _build_category_resolver(site_id, category_id)
-
-    # Multi-field categories (e.g. Use of Sold Products) multiply the chosen
-    # method's fields instead of using the one-value heuristic below.
-    calc_spec = _load_calculation_spec(site_id, category_id)
-
-    conn = get_connection()
-    try:
-        out: list[dict] = []
-        default_year = _factor_year(date_of_reporting, 0)
-
-        # Batch-load all emission factors for this (site, category) instead of
-        # querying per row (N+1 → 1 query). All years are indexed so each row can
-        # pick the factor matching its own reporting date.
-        factor_index = _load_factor_index(conn, site_id, category_id)
-
-        for _, r in page_df.iterrows():
-            activity_data = r.to_dict()
-            activity_unit = str(activity_data.get("activity_data_unit") or "").strip() or None
-            emission_category = str(activity_data.get("emission_category") or "").strip()
-
-            row_date = _row_reporting_date(activity_data, date_of_reporting)
-            row_year = _factor_year(row_date, default_year)
-
-            factor_value = None
-            denominator_unit = None
-            total_emission = 0.0
-            global_category_name = None
-            row_error = None
-
-            if emission_category:
-                display_key = emission_category.strip().lower()
-                # Resolve display name → EF name via column_config mapping,
-                # fall back to direct name match if no mapping exists
-                resolved = category_resolver.get(display_key)
-                ef_key = resolved.strip().lower() if resolved else display_key
-                ef_row = _pick_factor(factor_index, ef_key, row_year)
-                if not ef_row:
-                    logger.warning(
-                        f"No emission factor found for category '{emission_category}' "
-                        f"(ef_key='{ef_key}', resolved='{resolved}', year={row_year}). "
-                        f"Available keys: {list(factor_index.keys())}"
-                    )
-                if ef_row:
-                    global_category_name = resolved if resolved else emission_category
-                    factor_value = float(ef_row["factor_value"])
-                    denominator_unit = ef_row.get("denominator_unit")
-                    if calc_spec:
-                        activity_value, row_error = _compute_spec_activity_value(calc_spec, activity_data, activity_unit)
-                        if row_error is None and calc_spec.get("mode") == "per_unit":
-                            activity_unit = _normalize_unit_key(activity_unit)  # canonical spelling
-                    else:
-                        activity_value = _extract_activity_value(activity_data)
-                    if row_error is None and activity_value <= 0:
-                        row_error = "Missing or zero activity value"
-                    if row_error is None:
-                        if units_match_exact(denominator_unit, activity_unit):
-                            total_emission = round((activity_value * factor_value) / 1000.0, 2)
-                        else:
-                            conv = get_conversion_factor(activity_unit or "", denominator_unit or "")
-                            if conv:
-                                total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
-                            else:
-                                row_error = f"No unit conversion from '{activity_unit}' to '{denominator_unit}'"
-                                logger.warning(
-                                    f"No unit conversion for '{activity_unit}' → '{denominator_unit}' "
-                                    f"(category='{emission_category}')"
-                                )
-                else:
-                    # Mirrors import_all_rows: these rows are skipped there, so
-                    # the preview has to say why rather than showing a bare 0.
-                    row_error = (
-                        "No emission factors loaded for this category"
-                        if not factor_index
-                        else f"No emission factor found for '{emission_category}' (year {row_year})"
-                    )
-            else:
-                row_error = "Missing emission category"
-
-            row_out = dict(activity_data)
-            row_out["global_category_name"] = global_category_name
-            row_out["factor_value"] = factor_value
-            row_out["denominator_unit"] = denominator_unit
-            row_out["total_emission"] = total_emission
-            row_out["unit"] = "tCO2e"
-            row_out[_DATE_FIELD] = row_date
-            if row_error:
-                # Says exactly why; import will SKIP this row rather than save
-                # a zero or wrong total.
-                row_out["row_error"] = row_error
-
-            out.append(row_out)
-
-        return out, total
-    finally:
-        release_connection(conn)
-
-def _load_calculation_spec(site_id: int, category_id: int) -> dict | None:
-    """
-    Multi-field calculation spec from column_config.calculation (first user:
-    Use of Sold Products). Mirrors the Node backend's services/calculationSpec.ts:
-    when present, the activity value is the PRODUCT of the chosen method's
-    fields — never a single sniffed value.
-    """
-    try:
-        config = fetch_column_config(site_id, category_id)
-    except Exception as e:
-        logger.warning(f"Failed to load calculation spec for site={site_id}, category={category_id}: {e}")
-        return None
-    spec = (config or {}).get("calculation")
-    if not isinstance(spec, dict) or not isinstance(spec.get("methods"), dict):
-        return None
-    if spec.get("mode") == "per_method" and spec.get("method_column"):
-        return spec
-    if spec.get("mode") == "per_unit":
-        return spec
-    return None
-
-
-def _normalize_unit_key(unit) -> str:
-    """"tonne.km", "Tonne KM", "tonne-km", "tkm" -> "tonne.km" (mirrors Node)."""
-    u = re.sub(r"[\s_\-]+", ".", str(unit or "").strip().lower())
-    if u in ("tkm", "t.km", "tonnes.km", "tonne.kms"):
-        u = "tonne.km"
-    if u == "kms":
-        u = "km"
-    return u
-
-
-def _compute_spec_activity_value(spec: dict, activity_data: dict, activity_unit: str | None = None) -> tuple[float, str | None]:
-    """
-    Returns (product, error). Every field of the chosen method must be a
-    number > 0 (percent fields are 0-100 and divided by 100); anything else
-    is an error — a partial product would be a plausible-looking wrong total,
-    so spec rows never fall back to the one-value heuristic.
-    per_method: the method dropdown picks the fields. per_unit: the row's unit
-    does (transport: tonne.km = Weight x Distance, km = Distance alone).
-    Legacy per_unit rows (only the product stored) are recognised when the
-    other multiply fields are ABSENT from the row entirely.
-    """
-    if spec.get("mode") == "per_unit":
-        method_key = _normalize_unit_key(activity_unit)
-        if not method_key:
-            return 0.0, "Missing activity unit"
-        method = spec["methods"].get(method_key)
-        if not method or not method.get("multiply"):
-            return 0.0, f'Unit "{activity_unit}" is not configured for this category'
-    else:
-        method_value = activity_data.get(spec["method_column"])
-        method_key = str(method_value).strip() if method_value is not None else ""
-        if not method_key or method_key.lower() == "nan":
-            return 0.0, f'Missing "{spec["method_column"]}"'
-        method = spec["methods"].get(method_key)
-        if not method or not method.get("multiply"):
-            return 0.0, f'Unknown {spec["method_column"]} "{method_key}"'
-
-    legacy = spec.get("legacy_field")
-    if legacy and legacy in method["multiply"]:
-        others = [f for f in method["multiply"] if f != legacy]
-        if others and all(f not in activity_data for f in others):
-            try:
-                num = float(str(activity_data.get(legacy)).replace(",", "").strip())
-            except Exception:
-                num = float("nan")
-            if not (num > 0):
-                return 0.0, f'Missing or invalid "{legacy}"'
-            return num, None
-
-    percent_fields = set(method.get("percent") or [])
-    product = 1.0
-    for field in method["multiply"]:
-        raw = activity_data.get(field)
-        try:
-            num = float(str(raw).replace(",", "").strip())
-        except Exception:
-            num = float("nan")
-        if not (num > 0):  # catches NaN, 0, negatives, blanks, text
-            return 0.0, f'Missing or invalid "{field}"'
-        if field in percent_fields:
-            if num > 100:
-                return 0.0, f'"{field}" cannot be more than 100'
-            product *= num / 100.0
-        else:
-            product *= num
-    return product, None
-
-
-def _extract_activity_value(activity_data: dict) -> float:
-    """
-    Extract a numeric activity value from a mapped row dict.
-    Mirrors your Node/JS logic:
-      1) try common field names
-      2) else first numeric >= 100
-      3) else first numeric > 0
-    """
-    skip_cols = {
-        "material",
-        "disposal_method",
-        "fuel_type",
-        "vehicle_type",
-        "source_type",
-        "waste_type",
-        "transport_mode",
-    }
-
-    common_fields = [
-        "activity_value",
-        "quantity",
-        "value",
-        "amount",
-        "consumption",
-        "activity data",
-        "activity_data",
-    ]
-
-    keys = list(activity_data.keys())
-
-    # 1) exact common fields first
-    for field in common_fields:
-        match = next((k for k in keys if str(k).lower().strip() == field.lower().strip()), None)
-        if match:
-            v = activity_data.get(match)
-            if v not in (None, ""):
-                try:
-                    num = float(str(v).replace(",", "").strip())
-                    if num > 0:
-                        return num
-                except Exception:
-                    pass
-
-    # 2) numeric >= 100
-    for k, v in activity_data.items():
-        if str(k).lower().strip() in skip_cols:
-            continue
-        if str(k).lower().strip() == "emission_category":
-            continue
-        if v in (None, ""):
-            continue
-        try:
-            num = float(str(v).replace(",", "").strip())
-            if num >= 100:
-                return num
-        except Exception:
-            continue
-
-    # 3) any positive numeric
-    for k, v in activity_data.items():
-        if str(k).lower().strip() in skip_cols:
-            continue
-        if str(k).lower().strip() == "emission_category":
-            continue
-        if v in (None, ""):
-            continue
-        try:
-            num = float(str(v).replace(",", "").strip())
-            if num > 0:
-                return num
-        except Exception:
-            continue
-
-    return 0.0
 
 
 # Statuses that mean the stored file is gone on purpose. download_document_bytes
@@ -1538,359 +1047,17 @@ def cleanup_old_documents(older_than_days: int = 7, limit: int = 500) -> int:
     logger.info(f"cleanup_old_documents: processed {len(docs)} document(s)")
     return len(docs)
 
-def _norm(value) -> str:
-    return str(value if value is not None else "").strip().lower()
+
+# ---------- The import path (IM11) ----------
+# The calculation and the emission rows are ESG-lite's since IM11: /v1/excel/preview
+# and /import hand the mapped rows to its plans API (app/services/excel_plan_client.py).
+# This module only reads the sheet the way the mapping screen saw it.
 
 
-class ImportConflict(ValueError):
-    """The document is being imported, or was imported already (HTTP 409)."""
-
-
-# Cap on per-row skip reasons returned to the caller; the count is always exact.
-SKIPPED_ROWS_LIMIT = 1000
-
-
-def import_all_rows(
-    document_id: int,
-    mappings: dict[str, str],
-    selected_categories: list[str],
-    site_id: int,
-    category_id: int,
-    date_of_reporting: str,
-    chunk_size: int = 2000,
-    user_id: int = None,
-) -> dict:
-    import uuid
-    upload_batch_id = str(uuid.uuid4())
-
-    # Claim the document before reading it, so the same file can't be imported
-    # twice (double click, retry, parallel request). Released on failure.
-    claimed, status = claim_uploaded_document_for_import(document_id)
-    if not claimed:
-        if status is None:
-            raise ValueError("Invalid document_id")
-        if status == "importing":
-            raise ImportConflict("This file is already being imported.")
-        raise ImportConflict(
-            "This file has already been imported. Please re-upload it to import again."
-        )
-    try:
-        return _import_claimed_document(
-            document_id, mappings, selected_categories, site_id, category_id,
-            date_of_reporting, chunk_size, user_id, upload_batch_id,
-        )
-    except BaseException:
-        release_import_claim(document_id)
-        raise
-
-
-def _import_claimed_document(
-    document_id: int,
-    mappings: dict[str, str],
-    selected_categories: list[str],
-    site_id: int,
-    category_id: int,
-    date_of_reporting: str,
-    chunk_size: int,
-    user_id: int | None,
-    upload_batch_id: str,
-) -> dict:
+def load_mapped_sheet(document_id: int, mappings: dict[str, str]) -> tuple[pd.DataFrame, str | None]:
+    """The stored sheet with the mapped columns only, plus the file's name for the plan's source_name."""
     content, ext = download_document_bytes(document_id)
     df = _read_df_from_bytes(content, ext)
     mapped_df = map_df(df, mappings)
-
-    total_rows = len(mapped_df)
-
-    if selected_categories:
-        selected = {c.strip() for c in selected_categories}
-        if "emission_category" in mapped_df.columns:
-            mapped_df = mapped_df[
-                mapped_df["emission_category"].astype(str).str.strip().isin(selected)
-            ]
-
-    # Resolve uploaded category names → EF names via column_config mapping
-    category_resolver = _build_category_resolver(site_id, category_id)
-
-    # Multi-field categories (e.g. Use of Sold Products): multiply the chosen
-    # method's fields; rows that can't be computed are SKIPPED, never saved
-    # with a wrong or zero total.
-    calc_spec = _load_calculation_spec(site_id, category_id)
-
-    not_selected = total_rows - len(mapped_df)
-
-    conn = get_connection()
-    inserted = 0
-    fera_inserted = 0
-    skipped = 0
-    # Which rows were skipped and why, so the upload screen can hand them back
-    # as a file to fix. Capped: a sheet where every row fails needs one reason,
-    # not a response the size of the sheet.
-    skipped_rows: list[dict] = []
-
-    default_year = _factor_year(date_of_reporting, 0)
-    # Index every year up front so each row can use the factor matching its own
-    # reporting date — one query regardless of how many months the sheet spans.
-    factor_index = _load_factor_index(conn, site_id, category_id)
-
-    # FERA (Fuel and Energy Related Activities) - preload FERA emission factors
-    FERA_CATEGORY_ID = 28
-    FERA_TRIGGER_CATEGORIES = {1, 2, 4}  # Stationary Combustion, Mobile Combustion, Purchased Electricity
-    fera_factor_index: dict[str, list[dict]] = {}
-    if category_id in FERA_TRIGGER_CATEGORIES:
-        fera_factor_index = _load_factor_index(conn, site_id, FERA_CATEGORY_ID)
-
-    def flush(rows: list[dict]) -> None:
-        # Source rows first, then their FERA rows pointing back at them, then
-        # the source rows pointing at their FERA row (both directions, as the
-        # Node backend links a form entry and its FERA row).
-        nonlocal inserted, fera_inserted
-        if not rows:
-            return
-        source_ids = bulk_insert_emissions_with_conn(conn, rows, returning=True)
-        inserted += len(source_ids)
-        audited = [(pk, r["total_emission"]) for pk, r in zip(source_ids, rows)]
-        fera_rows = []
-        for source_id, r in zip(source_ids, rows):
-            fera = r.get("_fera_row")
-            if fera:
-                fera_rows.append({**fera, "fera_linked_id": source_id})
-        if fera_rows:
-            fera_ids = bulk_insert_emissions_with_conn(conn, fera_rows, returning=True)
-            fera_inserted += len(fera_ids)
-            link_fera_rows_with_conn(
-                conn, [(f["fera_linked_id"], fid) for f, fid in zip(fera_rows, fera_ids)]
-            )
-            audited += [(pk, f["total_emission"]) for pk, f in zip(fera_ids, fera_rows)]
-        # Every imported entry gets an audit row (action "import"), so its
-        # history shows it came from a sheet. Saving one entry by hand writes
-        # none; reviews and edits do.
-        audit_imported_rows_with_conn(conn, audited, user_id, f"Bulk import (batch {upload_batch_id})")
-
-    # The same rules as saving one entry by hand: a month a yearly entry
-    # already covers is refused (mode lock), and so is an entry the site
-    # already has for that category, month and subcategory (duplicate). The
-    # form files a month on its last day, while a sheet row keeps its own day,
-    # so entries are matched by month. Subcategories compare case- and
-    # space-blind, slightly stricter than the form's exact match. Looked up
-    # once per month; this import's own rows are left out, so a sheet with
-    # several rows for one fuel and month imports all of them.
-    existing_by_month: dict[str, list[dict]] = {}
-    yearly_cover: dict[tuple[int, str], bool] = {}
-
-    def covered_by_yearly(cat_id: int, day: str) -> bool:
-        if (cat_id, day) not in yearly_cover:
-            yearly_cover[(cat_id, day)] = yearly_covers_date_with_conn(conn, site_id, cat_id, day)
-        return yearly_cover[(cat_id, day)]
-
-    def duplicates_existing(day: str, activity_data: dict, emission_category: str) -> bool:
-        month = day[:7]
-        if month not in existing_by_month:
-            existing_by_month[month] = monthly_activity_in_month_with_conn(conn, site_id, category_id, day, upload_batch_id)
-        identity = (calc_spec or {}).get("identity_columns") or []
-        return any(
-            _norm(prev.get("emission_category")) == _norm(emission_category)
-            and all(_norm(prev.get(c)) == _norm(activity_data.get(c)) for c in identity)
-            for prev in existing_by_month[month]
-        )
-
-    try:
-        # Imports into one site run one at a time, so two files covering the
-        # same month can't both pass the duplicate check.
-        lock_site_for_import_with_conn(conn, site_id)
-        rows_buffer: list[dict] = []
-
-        for row_index, row in mapped_df.iterrows():
-            activity_data = row.to_dict()
-
-            # Separate extra_ prefixed fields into extra_data
-            extra_data: dict = {}
-            for k in list(activity_data.keys()):
-                if k.startswith("extra_"):
-                    val = activity_data.pop(k)
-                    real_key = k[len("extra_"):]
-                    if val is not None and str(val).strip():
-                        extra_data[real_key] = str(val).strip()
-
-            activity_unit = str(activity_data.get("activity_data_unit") or "").strip() or None
-            emission_category = str(activity_data.get("emission_category") or "").strip()
-
-            # Each row carries its own reporting date when a date column was
-            # mapped, so a single upload can span a whole year month by month.
-            # Popped so the raw date cell can't be mistaken for an activity value.
-            row_date = _row_reporting_date(activity_data, date_of_reporting)
-            row_year = _factor_year(row_date, default_year)
-            activity_data.pop(_DATE_FIELD, None)
-
-            matched_ef: dict | None = None
-            row_error: str | None = None
-            if factor_index and emission_category:
-                display_key = emission_category.strip().lower()
-                resolved = category_resolver.get(display_key)
-                ef_key = resolved.strip().lower() if resolved else display_key
-                matched_ef = _pick_factor(factor_index, ef_key, row_year)
-                if matched_ef:
-                    factor_value = float(matched_ef.get("factor_value") or 0)
-                    denom_unit = matched_ef.get("denominator_unit")
-                    if calc_spec:
-                        activity_value, row_error = _compute_spec_activity_value(calc_spec, activity_data, activity_unit)
-                        if row_error is None:
-                            if calc_spec.get("mode") == "per_unit":
-                                activity_unit = _normalize_unit_key(activity_unit)  # canonical spelling, stored as such
-                            # Same as the Node backend: persist the computed product next to the inputs.
-                            activity_data["activity_value"] = str(activity_value)
-                    else:
-                        activity_value = _extract_activity_value(activity_data)
-                    if row_error is not None:
-                        total_emission = 0.0
-                    elif activity_value <= 0:
-                        total_emission = 0.0
-                        row_error = "Missing or zero activity value"
-                    elif units_match_exact(denom_unit, activity_unit):
-                        total_emission = round((activity_value * factor_value) / 1000.0, 2)
-                    else:
-                        conv = get_conversion_factor(activity_unit or "", denom_unit or "")
-                        if not conv:
-                            total_emission = 0.0
-                            row_error = f"No unit conversion from '{activity_unit}' to '{denom_unit}'"
-                        else:
-                            total_emission = round((activity_value * float(conv) * factor_value) / 1000.0, 2)
-                else:
-                    total_emission = 0.0
-                    row_error = f"No emission factor found for '{emission_category}' (year {row_year})"
-            else:
-                total_emission = 0.0
-                row_error = (
-                    "Missing emission category" if not emission_category
-                    else "No emission factors loaded for this category"
-                )
-
-            if not row_error and covered_by_yearly(category_id, row_date):
-                row_error = f"A yearly entry already covers {row_date} for this category; delete it first or keep this category yearly"
-            elif not row_error and duplicates_existing(row_date, activity_data, emission_category):
-                row_error = f"An entry for '{emission_category}' in {row_date[:7]} already exists"
-
-            # An uncomputable row is never saved: a zero or one-field total
-            # would look plausible and poison the reports. It is reported back
-            # with its reason instead. Keyed on row_error, not on
-            # total_emission: every uncomputable path above sets one, while
-            # total_emission is already rounded to 2 dp, so testing it would
-            # also discard any legitimate row under 0.005 tCO2e.
-            if row_error:
-                logger.warning(f"Bulk import skipped a row: {row_error}")
-                skipped += 1
-                if len(skipped_rows) < SKIPPED_ROWS_LIMIT:
-                    skipped_rows.append({
-                        # 1 = the first data row under the header row.
-                        "row": int(row_index) + 1,
-                        "emission_category": emission_category or None,
-                        "reason": row_error,
-                    })
-                continue
-
-            ef_snapshot = None
-            if matched_ef:
-                ef_snapshot = {
-                    "emission_factor_id": matched_ef.get("emission_factor_id"),
-                    "emission_category_name": matched_ef.get("emission_category_name"),
-                    "global_category_name": matched_ef.get("global_category_name"),
-                    "factor_value": float(matched_ef.get("factor_value") or 0),
-                    "denominator_unit": matched_ef.get("denominator_unit"),
-                    "source": matched_ef.get("source"),
-                    "year": matched_ef.get("year"),
-                }
-
-            source_row = {
-                    "site_id": site_id,
-                    "category_id": category_id,
-                    "activity_data": activity_data,
-                    "extra_data": extra_data,
-                    "total_emission": total_emission,
-                    "unit": "tCO2e",
-                    "date_of_reporting": row_date,
-                    "activity_data_unit": activity_unit,
-                    "upload_batch_id": upload_batch_id,
-                    "emission_factor_snapshot": ef_snapshot,
-                    "created_by": user_id,
-            }
-            rows_buffer.append(source_row)
-
-            # Auto-create FERA emission row if applicable
-            if fera_factor_index and emission_category:
-                fera_key = emission_category.strip().lower()
-                resolved_fera = category_resolver.get(fera_key)
-                fera_lookup = resolved_fera.strip().lower() if resolved_fera else fera_key
-                fera_matched = _pick_factor(fera_factor_index, fera_lookup, row_year)
-                # FERA keeps its own mode lock: no monthly twin inside a
-                # yearly FERA entry (the form skips the twin the same way).
-                if fera_matched and not covered_by_yearly(FERA_CATEGORY_ID, row_date):
-                    fera_factor_value = float(fera_matched.get("factor_value") or 0)
-                    fera_denom_unit = fera_matched.get("denominator_unit")
-                    fera_activity_value = _extract_activity_value(activity_data)
-                    if fera_activity_value > 0:
-                        if units_match_exact(fera_denom_unit, activity_unit):
-                            fera_emission = round((fera_activity_value * fera_factor_value) / 1000.0, 2)
-                        else:
-                            fera_conv = get_conversion_factor(activity_unit or "", fera_denom_unit or "")
-                            fera_emission = round((fera_activity_value * float(fera_conv) * fera_factor_value) / 1000.0, 2) if fera_conv else 0.0
-                        if fera_emission > 0:
-                            fera_activity = dict(activity_data)
-                            fera_activity["_source_category_id"] = category_id
-                            fera_activity["_auto_fera"] = True
-                            fera_ef_snapshot = {
-                                "emission_factor_id": fera_matched.get("emission_factor_id"),
-                                "emission_category_name": fera_matched.get("emission_category_name"),
-                                "global_category_name": fera_matched.get("global_category_name"),
-                                "factor_value": fera_factor_value,
-                                "denominator_unit": fera_denom_unit,
-                                "source": fera_matched.get("source"),
-                                "year": fera_matched.get("year"),
-                            }
-                            source_row["_fera_row"] = (
-                                {
-                                    "site_id": site_id,
-                                    "category_id": FERA_CATEGORY_ID,
-                                    "activity_data": fera_activity,
-                                    "extra_data": extra_data,
-                                    "total_emission": fera_emission,
-                                    "unit": "tCO2e",
-                                    "date_of_reporting": row_date,
-                                    "activity_data_unit": activity_unit,
-                                    "upload_batch_id": upload_batch_id,
-                                    "emission_factor_snapshot": fera_ef_snapshot,
-                                    "created_by": user_id,
-                                }
-                            )
-
-            if len(rows_buffer) >= chunk_size:
-                flush(rows_buffer)
-                rows_buffer = []
-
-        flush(rows_buffer)
-
-        # Same transaction as the rows: either both land or neither does. A
-        # parallel import of this document waits on the row lock here, then
-        # finds it 'imported' and rolls its rows back.
-        if not mark_document_imported_with_conn(conn, document_id):
-            raise ImportConflict("This file has already been imported.")
-        conn.commit()
-        # Rows are committed, so the spreadsheet is no longer needed. Removing it
-        # here — rather than on a schedule — keeps nothing in storage that the
-        # database does not already hold.
-        delete_document_file(document_id, new_status="imported")
-        # inserted + skipped + not_selected == total_rows; FERA rows created
-        # alongside are counted separately so inserted never exceeds the sheet.
-        return {
-            "inserted": inserted,
-            "fera_inserted": fera_inserted,
-            "skipped": skipped,
-            "skipped_rows": skipped_rows,
-            "not_selected": not_selected,
-            "total_rows": total_rows,
-            "upload_batch_id": upload_batch_id if inserted > 0 else None,
-        }
-
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        release_connection(conn)
+    doc = get_uploaded_document_by_id(document_id) or {}
+    return mapped_df, (doc.get("document_name") or None)

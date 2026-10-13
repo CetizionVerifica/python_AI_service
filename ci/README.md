@@ -12,8 +12,8 @@ container (`ci/tests/conftest.py`).
 | No destructive schema or data changes | an added line drops, truncates, renames or retypes schema, or deletes every row; or a file in `scripts/` deletes or bulk-updates rows |
 | Install with `uv sync --locked` | `uv.lock` out of date with `pyproject.toml` |
 | Compile and lint (`ruff` E9/F63/F7/F82) | syntax errors, undefined names |
-| `ci/tests/test_calculation_snapshot.py` | spec products, the activity-value heuristic, unit conversions, unit/number/date parsing, rounding, invoice total checks or category mapping change |
-| `ci/tests/test_import_snapshot.py` | a spreadsheet bulk import writes different rows or totals, or this service's SQL no longer fits the ESG-lite schema |
+| `ci/tests/test_calculation_snapshot.py` | unit/number/date parsing, invoice total checks or category mapping change (the import's own calculation is ESG-lite's since IM11; its golden snapshot locks it) |
+| `ci/tests/test_excel_plan_client.py` | the bulk upload stops sending ESG-lite's plans API what the P27 page mapped (rows, chunks, token, channel), or this service inserts emission rows again |
 | `ci/tests/test_startup_tables.py` | the startup `CREATE TABLE IF NOT EXISTS` steps fail on a second boot or lose rows |
 
 ## When a check blocks you on purpose

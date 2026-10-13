@@ -3,6 +3,7 @@
 Company 1 (reference data) owns sites 1 and 2. Added here: company 60 with
 site 60, holding a site-less mapping and its own factor names. Nothing of
 company 60 may resolve a name for a site of company 1, and vice versa.
+(The bulk import's own name resolution is ESG-lite's since IM11, tested there.)
 """
 import pytest
 
@@ -29,14 +30,6 @@ def other_company(throwaway_db):
         cur.execute("DELETE FROM emission_factors WHERE emission_factor_id IN (601, 602)")
         cur.execute("DELETE FROM site WHERE site_id = 60")
         cur.execute("DELETE FROM company WHERE company_id = 60")
-
-
-def test_mapping_fallback_ignores_other_companies(other_company):
-    from app.services import excel_parser as ep
-
-    resolver = ep._build_category_resolver(site_id=1, category_id=1)
-    assert resolver == {"gasoil": "Diesel"}
-    assert ep._build_category_resolver(site_id=60, category_id=1) == {"hsd": "Rival Secret Fuel"}
 
 
 def test_category_fallback_stays_in_company(other_company):

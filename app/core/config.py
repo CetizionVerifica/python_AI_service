@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = ""
     DB_NAME: str = "emissions_db"
 
+    # ESG-lite's API, for the bulk upload's plans (IM11): /v1/excel/preview and
+    # /import hand the sheet's rows to POST /imports/plans there, with the
+    # caller's own token. Same host the browser calls (VITE_API_URL in the FE).
+    ESG_LITE_API_URL: str = "http://localhost:3000"
+
     # Cloudinary
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""

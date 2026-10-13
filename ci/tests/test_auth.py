@@ -264,7 +264,7 @@ def test_excel_wizard_checks_site_document_and_overrides_user(client, throwaway_
     from app.api import excel as excel_api
 
     monkeypatch.setattr(excel_api.cloudinary_service, "is_configured", lambda: False)
-    csv = ("rows.csv", b"Fuel,Qty\nDiesel,1\n", "text/csv")
+    csv = ("rows.csv", b"Fuel,Qty,Unit\nDiesel,1,litre\n", "text/csv")
 
     res = client.post("/v1/excel/upload", headers=bearer(USER_A), files={"file": csv})
     assert res.status_code == 200, res.text
@@ -275,15 +275,30 @@ def test_excel_wizard_checks_site_document_and_overrides_user(client, throwaway_
         cur.execute("SELECT id, uploaded_by FROM uploaded_documents WHERE id IN (%s, %s) ORDER BY id", (doc_a, doc_b))
         assert cur.fetchall() == [(doc_a, USER_A), (doc_b, USER_B)]
 
+    # Since IM11 the rows go to ESG-lite's plans API with the caller's own
+    # token (never a client-sent user_id); stand in for it here.
     calls = []
 
-    def fake_import(**kw):
-        calls.append(kw)
-        return {"inserted": 0, "skipped": 0, "total_rows": 0}
+    class FakePlans(excel_api.plans.PlanClient):
+        def __init__(self, token, **kw):
+            self.token = token
 
-    monkeypatch.setattr(excel_api, "import_all_rows", fake_import)
+        def close(self):
+            pass
+
+    def fake_create(client_, source_name, rows, company_id):
+        calls.append({"token": client_.token, "rows": rows, "company_id": company_id})
+        return {"plan_id": "p", "version": 1}
+
+    def fake_commit(client_, **kw):
+        return {"inserted": 0, "skipped": 0, "total_rows": 0, "skipped_rows": []}
+
+    monkeypatch.setattr(excel_api.plans, "PlanClient", FakePlans)
+    monkeypatch.setattr(excel_api.plans, "create_plan_from_rows", fake_create)
+    monkeypatch.setattr(excel_api.plans, "commit_plan", fake_commit)
+    monkeypatch.setattr(excel_api, "delete_document_file", lambda *a, **k: None)
     body = {
-        "document_id": doc_a, "mappings": {}, "selected_categories": [],
+        "document_id": doc_a, "mappings": {"emission_category": "Fuel", "activity_value": "Qty", "activity_data_unit": "Unit"}, "selected_categories": [],
         "site_id": SITE_A, "category_id": 1, "date_of_reporting": "2025-01-01", "user_id": USER_B,
     }
     # Another company's site.
@@ -297,9 +312,12 @@ def test_excel_wizard_checks_site_document_and_overrides_user(client, throwaway_
 
     res = client.post("/v1/excel/import", headers=bearer(USER_A), json=body)
     assert res.status_code == 200, res.text
-    assert calls[-1]["user_id"] == USER_A and calls[-1]["site_id"] == SITE_A
+    assert calls[-1]["token"]  # the caller's own bearer is what travels to ESG-lite
+    assert calls[-1]["rows"][0]["site_id"] == SITE_A and calls[-1]["company_id"] is None
 
-    # A Superadmin may use any document and site.
+    # A Superadmin may use any document and site; the plan then names that site's client.
     res = client.post("/v1/excel/import", headers=bearer(SUPERADMIN), json={**body, "document_id": doc_b, "site_id": SITE_B})
     assert res.status_code == 200, res.text
-    assert calls[-1]["user_id"] == SUPERADMIN
+    assert calls[-1]["rows"][0]["site_id"] == SITE_B and calls[-1]["company_id"] == 50
+
+
