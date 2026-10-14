@@ -52,8 +52,11 @@ SERVICE = {"X-Service-Key": os.environ.get("AI_SERVICE_KEY", "")}
 
 @pytest.fixture(scope="module")
 def world(throwaway_db):
-    from app.core.database import ensure_uploaded_documents_table
+    from app.core.database import ensure_emission_factor_uploads_table, ensure_uploaded_documents_table
 
+    # throwaway_db drops the schema, so a table app.main made on import (when an
+    # earlier test module imported it first) is gone: make both again here.
+    ensure_emission_factor_uploads_table()
     ensure_uploaded_documents_table()
     with throwaway_db.cursor() as cur:
         cur.execute(INVOICE_TABLE)
@@ -286,7 +289,7 @@ def test_excel_wizard_checks_site_document_and_overrides_user(client, throwaway_
         def close(self):
             pass
 
-    def fake_create(client_, source_name, rows, company_id):
+    def fake_create(client_, source_name, rows, company_id, mapping=None):
         calls.append({"token": client_.token, "rows": rows, "company_id": company_id})
         return {"plan_id": "p", "version": 1}
 
