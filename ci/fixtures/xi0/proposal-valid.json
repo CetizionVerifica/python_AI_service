@@ -1,0 +1,156 @@
+{
+  "document_id": 42,
+  "site_id": 2,
+  "model": {
+    "name": "claude-sonnet",
+    "calls": 1,
+    "cached_profile_hits": 1
+  },
+  "sheets": [
+    {
+      "sheet_name": "Fuel 2025",
+      "fingerprint": "1e5ec4a6dccac41470f4b632aaad4bfb1278fd0b2db82fb7c6e4beba1df98acf",
+      "header_row": 3,
+      "data_rows": 120,
+      "layout": "rows",
+      "site_id": 2,
+      "site_column": {
+        "column": "Site",
+        "values": [
+          {
+            "text": "Plant 2",
+            "matches_site": true
+          },
+          {
+            "text": "Plant 9",
+            "matches_site": false
+          }
+        ]
+      },
+      "category": {
+        "kind": "fixed",
+        "id": 3,
+        "label": "Stationary combustion",
+        "confidence": 1.0,
+        "source": "profile"
+      },
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": [
+        {
+          "key": "activity_value",
+          "label": "Quantity",
+          "required": true,
+          "column": "Qty (L)",
+          "confidence": 0.97,
+          "source": "rules",
+          "skipped": false
+        },
+        {
+          "key": "activity_unit",
+          "label": "Unit",
+          "required": true,
+          "column": "Unit",
+          "confidence": 1.0,
+          "source": "profile",
+          "skipped": false
+        },
+        {
+          "key": "extra_vehicle",
+          "label": "Vehicle",
+          "required": false,
+          "column": null,
+          "confidence": 0.0,
+          "source": "rules",
+          "skipped": true
+        }
+      ],
+      "activities": [
+        {
+          "sheet_text": "HSD",
+          "category_id": 3,
+          "factor_name": "Diesel",
+          "confidence": 0.92,
+          "source": "llm",
+          "save_mapping": true
+        },
+        {
+          "sheet_text": "Furnace oil",
+          "category_id": 3,
+          "factor_name": null,
+          "confidence": 0.4,
+          "source": "llm",
+          "save_mapping": false
+        }
+      ],
+      "not_in_context": [
+        "Plant 9"
+      ],
+      "confidence": 0.92,
+      "source": "mixed",
+      "excluded": false
+    },
+    {
+      "sheet_name": "Electricity",
+      "fingerprint": "e2d70fab39669e675ef536590651026c42fd04a7967053b369595511d30812d8",
+      "header_row": 1,
+      "data_rows": 4,
+      "layout": "months_as_columns",
+      "site_id": 2,
+      "site_column": null,
+      "category": {
+        "kind": "column",
+        "column": "Meter",
+        "values": [
+          {
+            "text": "Grid",
+            "id": 5,
+            "confidence": 0.9,
+            "source": "llm"
+          },
+          {
+            "text": "DG set",
+            "id": null,
+            "confidence": 0.3,
+            "source": "llm"
+          }
+        ]
+      },
+      "period": {
+        "kind": "months_as_columns",
+        "columns": [
+          {
+            "column": "Jan",
+            "date": "2025-01-31"
+          },
+          {
+            "column": "Feb",
+            "date": "2025-02-28"
+          },
+          {
+            "column": "Mar",
+            "date": "2025-03-31"
+          }
+        ]
+      },
+      "fields": [
+        {
+          "key": "activity_unit",
+          "label": "Unit",
+          "required": true,
+          "column": null,
+          "confidence": 0.0,
+          "source": "rules",
+          "skipped": false
+        }
+      ],
+      "activities": [],
+      "not_in_context": [],
+      "confidence": 0.3,
+      "source": "llm",
+      "excluded": false
+    }
+  ]
+}
