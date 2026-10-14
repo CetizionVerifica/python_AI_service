@@ -30,6 +30,7 @@ class FakeEsgLite:
         self.profiles: list[dict] = []
         self.plans: dict[str, dict] = {}
         self.disabled = False
+        self.no_profiles_route = False
 
     def transport(self):
         return httpx.MockTransport(self.handle)
@@ -51,6 +52,8 @@ class FakeEsgLite:
             q = request.url.params.get("q", "").lower()
             rows = [{"name": n, "kind": "factor", "units": [], "latest_year": 2025} for n in names.get(cid, []) if not q or q in n.lower()]
             return httpx.Response(200, json=rows)
+        if path == "/imports/mapping-profiles" and self.no_profiles_route:
+            return httpx.Response(404, json={"message": "Not found"})
         if path == "/imports/mapping-profiles":
             fp = request.url.params.get("fingerprint")
             return httpx.Response(200, json=[p for p in self.profiles if p["fingerprint"] == fp])
@@ -252,3 +255,23 @@ def test_rate_limit_needs_a_user_id():
     with pytest.raises(HTTPException) as e:
         mapping_api.check_propose_rate(None)
     assert e.value.status_code == 403
+
+
+def test_no_model_call_when_esg_lite_has_no_mapping_profiles_route(api, monkeypatch):
+    """Without XI3's route nothing has checked the client's smart-import switch: rules only."""
+    calls = []
+
+    class Model:
+        name = "fake-claude"
+
+        def propose(self, system, user):
+            calls.append(user)
+            raise AssertionError("the model must not be called")
+
+    monkeypatch.setattr(mapping_api, "model_for_propose", lambda: Model())
+    client, esg, state = api
+    esg.no_profiles_route = True
+    state["file"] = "09-two-row-merged-header.xlsx"
+    res = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth())
+    assert res.status_code == 200, res.text
+    assert calls == [] and res.json()["model"] == {"name": "none", "calls": 0, "cached_profile_hits": 0}

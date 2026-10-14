@@ -27,7 +27,7 @@ Rules:
 - Never compute, convert or sum values. ESGLite calculates.
 - Fill only the parts listed under NEEDED; leave the others null.
 - confidence is 0 to 1 and means how sure you are that a human would agree.
-- A period "column" names the column holding dates or months; "months_as_columns" lists month columns with their month-end date (YYYY-MM-DD); "yearly" needs year_type CY (Jan-Dec) or FY (Apr-Mar) and the year it starts in; "monthly_fixed" is one month-end date for the whole sheet.
+- A period "column" names the column holding dates or months; "months_as_columns" lists month columns with their month-end date (YYYY-MM-DD); "yearly" needs year_type CY (Jan-Dec) or FY (Apr-Mar) and, for FY, the year it ends in (FY 2025-26 → 2026), for CY the year; "monthly_fixed" is one month-end date for the whole sheet.
 - fields.key is one of the keys listed for the category: activity_name (the column with the activity wording), activity_value (the quantity), activity_unit (the unit), and the form's own keys.
 - activities maps each sheet wording to one factor_name from that category's names, or null when none fits.
 Answer with the JSON shape only."""
