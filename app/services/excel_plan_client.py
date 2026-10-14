@@ -492,6 +492,27 @@ def plan_page(
     }
 
 
+def check_plan_is_this_sheet(client: PlanClient, plan_id: str, *, source_name: str, row_count: int) -> dict:
+    """Refuse a ``plan_id`` that was not planned from this upload.
+
+    The commit consumes the document and reports its sheet's counts, so the plan
+    must be the one ``/preview`` made from it: a ``bulk_upload`` plan named after
+    this file, holding as many rows as the sheet sends. A Claude (``mcp``) draft
+    or another file's plan answers 422 before anything is committed.
+    """
+    plan = client.get_plan(plan_id, page=1, page_size=1)
+    counts = plan.get("counts") or {}
+    same = (
+        plan.get("channel") == CHANNEL
+        and str(plan.get("source_name") or "").strip() == source_name.strip()
+        and int(counts.get("rows") or 0) == int(row_count)
+    )
+    if not same:
+        logger.warning(f"import refused: plan {plan_id} was not previewed from this file")
+        raise ValueError("This plan was not made from this file. Go back to the preview and import again.")
+    return plan
+
+
 def idempotency_key(document_id: int, plan_id: str) -> str:
     """One key per file and plan, so a retried commit returns the stored batch instead of a second one."""
     return f"bulk-upload:doc-{int(document_id)}:plan-{plan_id}"
