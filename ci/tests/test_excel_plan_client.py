@@ -467,6 +467,24 @@ def test_import_commits_the_previewed_plan_once_and_writes_no_emission_rows(api,
     assert again.status_code == 409
 
 
+def test_a_failed_file_delete_still_marks_the_document_imported(world, throwaway_db, monkeypatch):
+    """The rows are on ESG-lite by the time the file is deleted, so a storage
+    hiccup must not leave the document "importing" (a retry would then be
+    refused as already being imported for a batch that landed)."""
+    from app.services import excel_parser as ep
+
+    def boom(public_id):
+        raise RuntimeError("storage down")
+
+    monkeypatch.setattr(ep.cloudinary_service, "delete_file", boom)
+    with throwaway_db.cursor() as cur:
+        cur.execute("UPDATE uploaded_documents SET cloudinary_public_id = 'asset-1', status = 'importing' WHERE id = %s", (DOC,))
+    ep.delete_document_file(DOC, new_status="imported")
+    with throwaway_db.cursor() as cur:
+        cur.execute("SELECT status FROM uploaded_documents WHERE id = %s", (DOC,))
+        assert cur.fetchone()[0] == "imported"
+
+
 def test_import_without_a_plan_plans_then_commits(api):
     client, esg = api
     res = client.post("/v1/excel/import", json=body(), headers=bearer(MANAGER, "Manager"))
