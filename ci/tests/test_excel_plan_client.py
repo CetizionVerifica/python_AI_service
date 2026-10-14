@@ -51,6 +51,8 @@ class FakeEsgLite:
             "totals": {"tco2e": round(sum(r["result"]["total_tco2e"] for r in ready), 6), "by_category": [], "by_month": []},
             "issues_summary": [{"code": "UNKNOWN_ACTIVITY", "count": len(issue), "example_row_refs": [r["row_ref"] for r in issue][:5]}] if issue else [],
             "expires_at": "2026-01-01T00:00:00.000Z",
+            "channel": p.get("channel", "bulk_upload"),
+            "source_name": p.get("source_name"),
             **({"committed": p["committed"]} if p.get("committed") else {}),
         }
 
@@ -87,7 +89,7 @@ class FakeEsgLite:
                 return httpx.Response(413, json={"code": "IMPORT_TOO_MANY_ROWS", "message": "Too many rows"})
             self.counter += 1
             plan_id = f"00000000-0000-4000-8000-{self.counter:012d}"
-            self.plans[plan_id] = {"version": 1, "status": "draft", "rows": [self.plan_row(r) for r in body["rows"]], "source_name": body["source_name"], "company_id": body.get("company_id")}
+            self.plans[plan_id] = {"version": 1, "status": "draft", "rows": [self.plan_row(r) for r in body["rows"]], "source_name": body["source_name"], "channel": body.get("channel"), "company_id": body.get("company_id")}
             return httpx.Response(201, json={**self._plan(plan_id), "rows": self.plans[plan_id]["rows"][:50], "page": 1, "page_size": 50, "total_rows": len(body["rows"])})
         parts = path.split("/")
         plan_id = parts[3] if len(parts) > 3 else None
@@ -117,6 +119,9 @@ class FakeEsgLite:
             state = request.url.params.get("state")
             if state:
                 rows = [r for r in rows if r["state"] == state]
+            code = request.url.params.get("code")
+            if code:
+                rows = [r for r in rows if any(i["code"] == code for i in r["issues"])]
             page = int(request.url.params.get("page", 1))
             size = int(request.url.params.get("page_size", 50))
             return httpx.Response(200, json={**self._plan(plan_id), "rows": rows[(page - 1) * size : page * size], "page": page, "page_size": size, "total_rows": len(rows)})
@@ -469,6 +474,30 @@ def test_import_commits_the_previewed_plan_once_and_writes_no_emission_rows(api,
     assert again.status_code == 409
 
 
+def test_import_refuses_a_plan_that_is_not_this_files(api, throwaway_db, world):
+    """A plan_id is only committed with the document it was previewed from: the
+    commit consumes that file and reports its counts, so another file's plan or a
+    Claude draft is refused before ESG-lite is asked to commit anything."""
+    client, esg = api
+    headers = bearer(SUPERADMIN, "Superadmin")
+    other = client.post("/v1/excel/preview", json=body(document_id=OTHER_DOC), headers=headers).json()["plan"]
+    res = client.post("/v1/excel/import", json=body(plan_id=other["plan_id"], version=other["version"]), headers=headers)
+    assert res.status_code == 422, res.text
+    assert "not made from this file" in res.json()["detail"]
+    # A Claude draft with this file's name and row count is not a bulk upload either.
+    esg.plans["00000000-0000-4000-8000-00000000mcp1"] = {**esg.plans[other["plan_id"]], "source_name": "fuel-june.csv", "channel": "mcp"}
+    res = client.post("/v1/excel/import", json=body(plan_id="00000000-0000-4000-8000-00000000mcp1", version=1), headers=headers)
+    assert res.status_code == 422, res.text
+    assert not [r for r in esg.requests if r["path"].endswith("/commit")]
+    assert world["deleted"] == []
+    with throwaway_db.cursor() as cur:
+        cur.execute("SELECT status FROM uploaded_documents WHERE id = %s", (DOC,))
+        assert cur.fetchone()[0] == "uploaded"
+    # The file's own plan still goes through.
+    mine = client.post("/v1/excel/preview", json=body(), headers=headers).json()["plan"]
+    assert client.post("/v1/excel/import", json=body(plan_id=mine["plan_id"], version=mine["version"]), headers=headers).status_code == 200
+
+
 def test_a_failed_file_delete_still_marks_the_document_imported(world, throwaway_db, monkeypatch):
     """The rows are on ESG-lite by the time the file is deleted, so a storage
     hiccup must not leave the document "importing" (a retry would then be
@@ -513,3 +542,21 @@ def test_a_failed_commit_hands_the_file_back(api, throwaway_db, world, monkeypat
     assert world["deleted"] == []
     esg.fail = None
     assert client.post("/v1/excel/import", json=body(plan_id=plan["plan_id"], version=plan["version"]), headers=headers).status_code == 200
+
+
+def test_plan_page_forwards_the_issue_code_and_filters_local_rows_the_same_way(esg):
+    rows = [{"row_ref": f"Row {i}", "activity_name": "Unobtainium" if i % 3 == 0 else "Diesel", "activity_value": 1, "activity_unit": "litre", "period": {"kind": "monthly", "date": "2025-01-31"}} for i in range(1, 301)]
+    local = [
+        plans.LocalIssue(row=400, row_ref="Row 400", emission_category=None, code="SITE_NOT_ALLOWED", reason="Another site."),
+        plans.LocalIssue(row=401, row_ref="Row 401", emission_category=None, code="MISSING_UNIT", reason="No unit."),
+    ]
+    with client_for(esg) as c:
+        plan = plans.create_plan_from_rows(c, "f.xlsx", rows, None)
+        page2 = plans.plan_page(c, plan["plan_id"], page=2, page_size=50, state="issue", code="UNKNOWN_ACTIVITY", local_issues=local)
+        page1 = plans.plan_page(c, plan["plan_id"], page=1, page_size=50, code="SITE_NOT_ALLOWED", local_issues=local)
+    assert esg.requests[-2]["params"]["code"] == "UNKNOWN_ACTIVITY"
+    # 100 matching plan rows on the server; no local row has that code.
+    assert page2["total_rows"] == 100 and len(page2["rows"]) == 50
+    assert all(r["state"] == "issue" for r in page2["rows"])
+    # The local SITE_NOT_ALLOWED row is shown and counted; the MISSING_UNIT one is not.
+    assert page1["total_rows"] == 1 and [r["row_ref"] for r in page1["rows"]] == ["Row 400"]
