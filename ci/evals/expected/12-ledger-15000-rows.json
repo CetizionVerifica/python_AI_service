@@ -36,12 +36,15 @@
   "plan": {
     "rows": 15000,
     "out_of_scope_rows": 7500,
+    "out_of_scope_refs": [],
+    "out_of_scope_refs_rule": "ledger-odd-rows",
     "issues": {
       "SITE_NOT_ALLOWED": 7500,
       "DUPLICATE_IN_PLAN": "warning"
     },
     "tco2e": null
   },
+  "writable_category_ids": [],
   "commit": false,
   "hostile_text": null,
   "depends_on": null,

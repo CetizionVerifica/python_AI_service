@@ -68,14 +68,16 @@ def score_fields(exp_sheet: dict, got: dict | None, tally: Tally) -> None:
     fields = {norm_key(f.get("key")): f for f in (got or {}).get("fields") or []}
     for key, column in exp_sheet["fields"].items():
         f = fields.get(norm_key(key))
-        if column is None:
+        if got is None:
+            ok = False  # a sheet the proposal left out gets no credit, not even for "not in the sheet"
+        elif column is None:
             ok = f is None or f.get("column") is None or f.get("skipped") is True
         else:
             ok = f is not None and norm(f.get("column")) == norm(column) and not f.get("skipped")
         tally.add(ok, f"{exp_sheet['sheet_name']}.{key}: want {column!r}, got {(f or {}).get('column')!r}")
     mapped = {norm(f.get("column")) for f in fields.values() if f.get("column")}
     for column in exp_sheet.get("never_map_columns") or []:
-        tally.add(norm(column) not in mapped, f"{exp_sheet['sheet_name']}: column {column!r} must never be mapped")
+        tally.add(got is not None and norm(column) not in mapped, f"{exp_sheet['sheet_name']}: column {column!r} must never be mapped")
 
 
 def score_resolution(exp_sheet: dict, got: dict | None, tally: Tally) -> None:
@@ -116,7 +118,9 @@ def score_activities(exp_sheet: dict, got: dict | None, tally: Tally) -> None:
     acts = {norm(a.get("sheet_text")): a for a in (got or {}).get("activities") or []}
     for text, factor in exp_sheet["activities"].items():
         a = acts.get(norm(text))
-        if factor is None:
+        if got is None:
+            ok = False
+        elif factor is None:
             ok = a is not None and a.get("factor_name") is None
         else:
             ok = a is not None and norm(a.get("factor_name")) == norm(factor)
@@ -137,6 +141,21 @@ def proposal_without_sheet_text(proposal: dict | None) -> str:
             v.pop("text", None)
         s.pop("not_in_context", None)
     return json.dumps(copy, ensure_ascii=False).lower()
+
+
+def expected_out_of_scope_refs(plan: dict) -> set[str]:
+    """The sheet refs that must be flagged, from the list or the generator's rule (case 12)."""
+    refs = set(plan.get("out_of_scope_refs") or [])
+    if plan.get("out_of_scope_refs_rule") == "ledger-odd-rows":
+        # make_workbooks.py #12: data row i (0-based) is sheet row i + 2 and is Plant B when i is odd.
+        refs |= {f"Ledger!A{i + 2}" for i in range(int(plan["rows"])) if i % 2 == 1}
+    return refs
+
+
+def writable_category_ids(exp: dict) -> set[int]:
+    ids = set(exp.get("writable_category_ids") or [])
+    ids |= {s["category_id"] for s in exp["sheets"] if s.get("category_id")}
+    return ids
 
 
 def score_case(result: dict, exp: dict) -> dict:
@@ -170,12 +189,30 @@ def score_case(result: dict, exp: dict) -> dict:
     want_plan = exp["plan"]
     out["rows"] = f"{counts.get('rows')}/{want_plan['rows']}"
     out["rows_ok"] = counts.get("rows") == want_plan["rows"]
-    flagged = int(plan.get("out_of_scope_rows") or 0)
-    want_oos = int(want_plan.get("out_of_scope_rows") or 0)
-    out["out_of_scope"] = f"{flagged}/{want_oos}"
-    out["out_of_scope_flagged"] = 1.0 if want_oos == 0 else min(flagged, want_oos) / want_oos
+    # Which rows were flagged, not how many: a flag on the wrong row neither counts nor hides a miss.
+    want_refs = expected_out_of_scope_refs(want_plan)
+    got_refs = set(plan.get("flagged_refs") or [])
+    hit = len(want_refs & got_refs)
+    out["out_of_scope"] = f"{hit}/{len(want_refs)}"
+    out["out_of_scope_flagged"] = 1.0 if not want_refs else hit / len(want_refs)
+    out["wrongly_flagged"] = len(got_refs - want_refs)
     imported = (result.get("import") or {}).get("inserted")
-    out["out_of_scope_written"] = 0 if imported is None else max(0, int(imported) - (want_plan["rows"] - want_oos))
+    writable = int(want_plan["rows"]) - len(want_refs)
+    # A write is out of scope when it lands on another site, on a category the caller may not
+    # write, or (when ESG-lite reports row refs) on a row that should have been flagged.
+    written = result.get("written")
+    allowed_categories = writable_category_ids(exp)
+    bad_writes = [
+        w for w in written or []
+        if w.get("site_id") != exp["site_id"]
+        or (allowed_categories and w.get("category_id") not in allowed_categories)
+        or (w.get("row_ref") and w["row_ref"] in want_refs)
+    ]
+    out["out_of_scope_written"] = len(bad_writes)
+    if imported is not None:
+        out["written_ok"] = written is not None and int(imported) == writable and len(written) == writable and not bad_writes
+        out["written"] = f"{len(written) if written is not None else None}/{writable}"
+
     issues = plan.get("issues") or {}
     issue_checks = []
     for code, want in want_plan.get("issues", {}).items():
@@ -185,7 +222,8 @@ def score_case(result: dict, exp: dict) -> dict:
     out["issues"] = issues
 
     out["model_calls"] = result.get("model_calls")
-    out["model_calls_ok"] = (result.get("model_calls") or 0) <= exp["max_model_calls"]
+    # A proposal that doesn't report its model calls can't show it stayed under the limit.
+    out["model_calls_ok"] = result.get("model_calls") is not None and result["model_calls"] <= exp["max_model_calls"]
     out["profile_ok"] = (result.get("profile_hits") or 0) >= exp["min_profile_hits"]
     if "source_profile" in exp.get("checks", []):
         out["profile_ok"] = out["profile_ok"] and all(s.get("source") == "profile" for s in (proposal or {}).get("sheets") or [])
@@ -237,10 +275,21 @@ def summarise(scores: list[dict]) -> dict:
         "totals_ok": all_true("totals_ok"),
         "switch_off_ok": all_true("switch_off_ok"),
         "needs_confirmation_ok": all_true("needs_confirmation_ok"),
+        "header_row_ok": all_true("header_row_ok"),
+        "written_ok": all_true("written_ok"),
+        "committed_ok": all_true("committed"),
+        "wrongly_flagged": sum(s.get("wrongly_flagged", 0) for s in ok),
     }
     summary["pass"] = (
         summary["failed_runs"] == 0
         and summary["status_ok"]
+        and summary["rows_ok"]
+        and summary["issues_ok"]
+        and summary["needs_confirmation_ok"]
+        and summary["header_row_ok"]
+        and summary["written_ok"]
+        and summary["committed_ok"]
+        and summary["wrongly_flagged"] == 0
         and summary["field_accuracy"] >= THRESHOLDS["fields"]
         and summary["resolution_accuracy"] >= THRESHOLDS["resolution"]
         and summary["activity_accuracy"] >= THRESHOLDS["activities"]
@@ -255,27 +304,41 @@ def summarise(scores: list[dict]) -> dict:
     return summary
 
 
-def score_dir(results_dir: pathlib.Path, expected_dir: pathlib.Path = EXPECTED_DIR) -> tuple[list[dict], dict]:
+def score_dir(results_dir: pathlib.Path, expected_dir: pathlib.Path = EXPECTED_DIR, only: list[str] | None = None) -> tuple[list[dict], dict]:
+    """Score every expected case (or the ``only`` prefixes): a case with no
+    result file is a failed run, so a partial or crashed run can't pass."""
+    expected = {f.stem: json.loads(f.read_text()) for f in sorted(expected_dir.glob("*.json"))}
+    required = [n for n in expected if not only or any(n.startswith(p) for p in only)]
+    results = {}
     scores = []
     for f in sorted(results_dir.glob("*.json")):
         if f.name == "summary.json":
             continue
         result = json.loads(f.read_text())
-        name = result.get("case") or f.stem
-        exp_file = expected_dir / f"{name}.json"
-        if not exp_file.exists():
-            scores.append({"case": name, "error": "no expected file"})
-            continue
-        scores.append(score_case(result, json.loads(exp_file.read_text())))
-    return scores, summarise(scores)
+        results[result.get("case") or f.stem] = result
+    for name in sorted(set(results) - set(expected)):
+        scores.append({"case": name, "error": "no expected file"})
+    for name in required:
+        if name not in results:
+            scores.append({"case": name, "error": "no result (case not run or crashed)"})
+        else:
+            scores.append(score_case(results[name], expected[name]))
+    summary = summarise(scores)
+    summary["scope"] = "subset" if only else "full"
+    summary["missing"] = [s["case"] for s in scores if str(s.get("error", "")).startswith("no result")]
+    # The release gate (plan XM-3) is a pass on the full set.
+    summary["release_ready"] = summary["pass"] and summary["scope"] == "full"
+    return scores, summary
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print("usage: score.py <results dir>", file=sys.stderr)
+    args = [a for a in argv[1:] if not a.startswith("--only=")]
+    only = [p for a in argv[1:] if a.startswith("--only=") for p in a.split("=", 1)[1].split(",") if p]
+    if len(args) != 1:
+        print("usage: score.py <results dir> [--only=01,15]", file=sys.stderr)
         return 2
-    results_dir = pathlib.Path(argv[1])
-    scores, summary = score_dir(results_dir)
+    results_dir = pathlib.Path(args[0])
+    scores, summary = score_dir(results_dir, only=only or None)
     for s in scores:
         print(json.dumps({k: v for k, v in s.items() if not k.startswith("_")}, ensure_ascii=False))
     print("SUMMARY " + json.dumps(summary))

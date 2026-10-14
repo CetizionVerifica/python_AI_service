@@ -36,11 +36,18 @@
   "plan": {
     "rows": 6,
     "out_of_scope_rows": 3,
+    "out_of_scope_refs": [
+      "Fuel!A5",
+      "Fuel!A6",
+      "Fuel!A7"
+    ],
+    "out_of_scope_refs_rule": null,
     "issues": {
       "SITE_NOT_ALLOWED": 3
     },
     "tco2e": null
   },
+  "writable_category_ids": [],
   "commit": true,
   "hostile_text": null,
   "depends_on": null,

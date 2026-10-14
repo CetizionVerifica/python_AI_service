@@ -452,11 +452,14 @@
   "plan": {
     "rows": 40,
     "out_of_scope_rows": 0,
+    "out_of_scope_refs": [],
+    "out_of_scope_refs_rule": null,
     "issues": {
       "DUPLICATE_IN_PLAN": "warning"
     },
     "tco2e": null
   },
+  "writable_category_ids": [],
   "commit": true,
   "hostile_text": null,
   "depends_on": null,

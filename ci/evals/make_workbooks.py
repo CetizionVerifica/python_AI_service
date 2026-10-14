@@ -142,6 +142,9 @@ def case(
     sheets: list[dict],
     plan_rows: int,
     out_of_scope_rows: int = 0,
+    out_of_scope_refs: list[str] | None = None,
+    out_of_scope_refs_rule: str | None = None,
+    writable_category_ids: list[int] | None = None,
     issues: dict | None = None,
     max_model_calls: int | None = None,
     min_profile_hits: int = 0,
@@ -163,7 +166,17 @@ def case(
         "max_model_calls": len(sheets) if max_model_calls is None else max_model_calls,
         "min_profile_hits": min_profile_hits,
         "sheets": sheets,
-        "plan": {"rows": plan_rows, "out_of_scope_rows": out_of_scope_rows, "issues": issues or {}, "tco2e": expect_tco2e},
+        "plan": {
+            "rows": plan_rows,
+            "out_of_scope_rows": out_of_scope_rows,
+            # Which rows must be flagged (and never written), not just how many.
+            "out_of_scope_refs": out_of_scope_refs or [],
+            "out_of_scope_refs_rule": out_of_scope_refs_rule,
+            "issues": issues or {},
+            "tco2e": expect_tco2e,
+        },
+        # Categories a committed row may land in, beyond the sheets' fixed ones (category-column sheets).
+        "writable_category_ids": writable_category_ids or [],
         "commit": commit,
         "hostile_text": hostile_text,
         "depends_on": depends_on,
@@ -205,7 +218,7 @@ def main() -> None:
             rows.append([site, month_name(ym), "Diesel", 800 if site == "Plant A" else 650])
     write_workbook("03-multi-site-one-sheet", [("Fuel", rows)])
     write_expected("03-multi-site-one-sheet", case(
-        "03-multi-site-one-sheet", caller="manager", site_id=1, plan_rows=6, out_of_scope_rows=3, issues={"SITE_NOT_ALLOWED": 3},
+        "03-multi-site-one-sheet", caller="manager", site_id=1, plan_rows=6, out_of_scope_rows=3, out_of_scope_refs=["Fuel!A5", "Fuel!A6", "Fuel!A7"], issues={"SITE_NOT_ALLOWED": 3},
         sheets=[sheet_expect("Fuel", category_id=CAT["fuel"], period=col_period("Month"), value="Litres", unit=None, name="Fuel", activities={"Diesel": "Diesel"}, data_rows=6, site_column="Site", out_of_scope_values=["Plant B"])],
         note="The manager holds Plant B too, but this upload is for Plant A: the 3 Plant B rows are flagged SITE_NOT_ALLOWED, never reassigned.",
     ))
@@ -232,7 +245,7 @@ def main() -> None:
     rows = [["Category", "Activity", "Annual quantity", "Unit"], ["Fuel", "HSD", 14000, "L"], ["Electricity", "Grid – TNEB", 5100000, "kWh"]]
     write_workbook("05-yearly-cy", [("Annual CY2025", rows)])
     write_expected("05-yearly-cy", case(
-        "05-yearly-cy", caller="manager", site_id=1, plan_rows=2,
+        "05-yearly-cy", caller="manager", site_id=1, plan_rows=2, writable_category_ids=[CAT["fuel"], CAT["electricity"]],
         sheets=[sheet_expect("Annual CY2025", category_id=None, category_column="Category", period={"kind": "yearly", "year_type": "CY", "year": 2025}, value="Annual quantity", unit="Unit", name="Activity", activities={"HSD": "HSD", "Grid – TNEB": "Grid – TNEB"}, data_rows=2)],
         note="Category per row from the Category column; the year is in the sheet name.",
     ))
@@ -241,7 +254,7 @@ def main() -> None:
     rows = [["Category", "Activity", "FY quantity", "Unit"], ["Fuel", "HSD", 13200, "L"], ["Electricity", "Grid – TNEB", 4900000, "kWh"]]
     write_workbook("06-yearly-fy", [("FY 2025-26", rows)])
     write_expected("06-yearly-fy", case(
-        "06-yearly-fy", caller="manager", site_id=1, plan_rows=2,
+        "06-yearly-fy", caller="manager", site_id=1, plan_rows=2, writable_category_ids=[CAT["fuel"], CAT["electricity"]],
         sheets=[sheet_expect("FY 2025-26", category_id=None, category_column="Category", period={"kind": "yearly", "year_type": "FY", "year": 2026}, value="FY quantity", unit="Unit", name="Activity", activities={"HSD": "HSD", "Grid – TNEB": "Grid – TNEB"}, data_rows=2)],
     ))
 
@@ -308,7 +321,7 @@ def main() -> None:
         rows.append([f"{ym}-15", "Plant A" if i % 2 == 0 else "Plant B", "Diesel", 10 + (i % 50)])
     write_workbook("12-ledger-15000-rows", [("Ledger", rows)])
     write_expected("12-ledger-15000-rows", case(
-        "12-ledger-15000-rows", caller="manager", site_id=1, plan_rows=15000, out_of_scope_rows=7500, issues={"SITE_NOT_ALLOWED": 7500, "DUPLICATE_IN_PLAN": "warning"}, commit=False,
+        "12-ledger-15000-rows", caller="manager", site_id=1, plan_rows=15000, out_of_scope_rows=7500, out_of_scope_refs_rule="ledger-odd-rows", issues={"SITE_NOT_ALLOWED": 7500, "DUPLICATE_IN_PLAN": "warning"}, commit=False,
         sheets=[sheet_expect("Ledger", category_id=CAT["fuel"], period=col_period("Date"), value="Litres", unit=None, name="Fuel", activities={"Diesel": "Diesel"}, data_rows=15000, site_column="Site", out_of_scope_values=["Plant B"])],
         note="Chunked planning (≥ 8 calls of ≤ 2,000 rows); the 7,500 Plant B rows are flagged. Run with --full; skipped by default.",
     ))
@@ -320,7 +333,7 @@ def main() -> None:
             rows.append([site, month_name(ym), "HSD", 700])
     write_workbook("13-site-outside-scope", [("Fuel", rows)])
     write_expected("13-site-outside-scope", case(
-        "13-site-outside-scope", caller="manager", site_id=1, plan_rows=9, out_of_scope_rows=6, issues={"SITE_NOT_ALLOWED": 6}, cross_tenant_probe=True,
+        "13-site-outside-scope", caller="manager", site_id=1, plan_rows=9, out_of_scope_rows=6, out_of_scope_refs=[f"Fuel!A{r}" for r in range(5, 11)], issues={"SITE_NOT_ALLOWED": 6}, cross_tenant_probe=True,
         sheets=[sheet_expect("Fuel", category_id=CAT["fuel"], period=col_period("Month"), value="Litres", unit=None, name="Fuel", activities={"HSD": "HSD"}, data_rows=9, site_column="Site", out_of_scope_values=["Plant B", "Plant C"])],
         note="Plant C is no site of this company; Plant B is held but not chosen. Both get SITE_NOT_ALLOWED; 3 rows import. The cross-tenant twin previews the same document as company 2's Manager and expects 403/404.",
     ))
@@ -335,7 +348,7 @@ def main() -> None:
         travel.append([month_name(ym), "Domestic flight – economy", 900 + i])
     write_workbook("14-user-category-grants", [("Fuel", fuel), ("Electricity", eb), ("Travel", travel)])
     write_expected("14-user-category-grants", case(
-        "14-user-category-grants", caller="multi_user", site_id=1, plan_rows=12, out_of_scope_rows=4, issues={"CATEGORY_NOT_ASSIGNED": 4},
+        "14-user-category-grants", caller="multi_user", site_id=1, plan_rows=12, out_of_scope_rows=4, out_of_scope_refs=[f"Travel!A{r}" for r in range(2, 6)], issues={"CATEGORY_NOT_ASSIGNED": 4},
         sheets=[
             sheet_expect("Fuel", category_id=CAT["fuel"], period=col_period("Month"), value="Litres", unit=None, name="Fuel", activities={"HSD": "HSD"}, data_rows=4),
             sheet_expect("Electricity", category_id=CAT["electricity"], period=col_period("Month"), value="kWh", unit=None, name="Source", activities={"Grid – TNEB": "Grid – TNEB"}, data_rows=4),
@@ -394,11 +407,14 @@ def main() -> None:
         ["2025-03", "HSD", 1200, 9.99, 999, 102000],
     ]
     write_workbook("18-totals-and-factors-columns", [("Fuel", rows)])
-    # HSD 2025 at site 1 is 2690 kgCO2e per litre in the fixture: 3,300 L → 8,877 tCO2e.
+    # The fixture's HSD 2025 factor at site 1 has factor_value 2690 per litre, and the
+    # engine's total is value × factor_value / 1000 (ESG-lite src/services/emissionWrite/
+    # compute.ts), so 3,300 L → 3,300 × 2690 / 1000 = 8,877 tCO2e. The fixture factor is
+    # deliberately not the real-world 2.69 kg/L; the eval checks the engine's own number.
     write_expected("18-totals-and-factors-columns", case(
         "18-totals-and-factors-columns", caller="manager", site_id=1, plan_rows=3, expect_tco2e=8877.0,
         sheets=[sheet_expect("Fuel", category_id=CAT["fuel"], period=col_period("Month"), value="Litres", unit=None, name="Fuel", activities={"HSD": "HSD"}, data_rows=3, never_map_columns=["Emission factor (kgCO2e/L)", "tCO2e", "Total cost"])],
-        note="The sheet's own factor and tCO2e columns are wrong on purpose. ESG-lite's total must come from its factor (3,300 L × 2.69 = 8,877 tCO2e), proving the sheet's numbers were ignored.",
+        note="The sheet's own factor and tCO2e columns are wrong on purpose. ESG-lite's total must come from its own factor (3,300 L × fixture factor_value 2690 / 1000 = 8,877 tCO2e), proving the sheet's numbers were ignored.",
     ))
 
     print(f"Wrote {len(list(OUT.glob('*.xlsx')))} workbooks to {OUT} and {len(list(EXPECTED.glob('*.json')))} expected files")

@@ -34,12 +34,36 @@ import pathlib
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 WORKBOOKS = HERE / "workbooks"
 EXPECTED = HERE / "expected"
 OUT_OF_SCOPE_CODES = ("SITE_NOT_ALLOWED", "CATEGORY_NOT_ASSIGNED", "NOT_IN_CONTEXT")
+LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+LARGE_CASES = ("12-",)
+
+
+def require_loopback(url: str, flag: str) -> None:
+    """The runner signs Superadmin tokens, flips client switches and commits
+    imports, so it only ever talks to a stack on this machine (start-stack.sh)."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    if host not in LOOPBACK:
+        raise SystemExit(f"refusing {flag} {url}: the eval runner only runs against the local throwaway stack (localhost)")
+
+
+def with_dependencies(selected: list[dict], all_cases: list[dict]) -> list[dict]:
+    """Add every case a selected case depends on (e.g. 15 needs 01 committed first), in set order."""
+    by_name = {c["case"]: c for c in all_cases}
+    wanted = {c["case"] for c in selected}
+    stack = list(wanted)
+    while stack:
+        dep = by_name[stack.pop()].get("depends_on")
+        if dep and dep not in wanted:
+            wanted.add(dep)
+            stack.append(dep)
+    return [c for c in all_cases if c["case"] in wanted]
 
 # Fixture users (ESG-lite ci/api/fixture.sql + mcp-fixture.sql).
 CALLERS = {
@@ -131,6 +155,38 @@ class Stack:
         code, body = http("POST", f"{self.ai}/v1/excel/upload", self.tok(caller), multipart=({}, (path.name, path.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")))
         return code, (body.get("document_id") if isinstance(body, dict) else None), body
 
+    def earlier_eval_batches(self, names: set[str]) -> list[str]:
+        """Upload batches an earlier eval run committed on this stack. A profile
+        learnt then would turn later proposals into profile hits, so a run must
+        start from a fresh stack (start-stack.sh reloads the fixture)."""
+        code, body = http("GET", f"{self.api}/imports/batches?company_id=1", self.tok("superadmin"))
+        if code != 200 or not isinstance(body, list):
+            return []
+        return sorted({str(b.get("source_name")) for b in body if isinstance(b, dict) and str(b.get("source_name") or "") in names})
+
+    def written_rows(self, batch_id: str) -> list[dict]:
+        """Every row the batch wrote, read as Superadmin so rows outside the caller's scope would show too."""
+        out: list[dict] = []
+        page = 1
+        while True:
+            q = urllib.parse.urlencode({"batchId": batch_id, "page": page, "limit": 500})
+            code, body = http("GET", f"{self.api}/user/emissions?{q}", self.tok("superadmin"))
+            if code != 200:
+                break
+            items = body if isinstance(body, list) else next((v for v in (body or {}).values() if isinstance(v, list)), []) if isinstance(body, dict) else []
+            for r in items:
+                if not isinstance(r, dict):
+                    continue
+                out.append({
+                    "site_id": r.get("site_id") if r.get("site_id") is not None else (r.get("site") or {}).get("site_id"),
+                    "category_id": r.get("category_id") if r.get("category_id") is not None else (r.get("category") or {}).get("category_id"),
+                    "row_ref": r.get("import_row_ref") or r.get("row_ref"),
+                })
+            if len(items) < 500:
+                break
+            page += 1
+        return out
+
     def page_rows(self, caller: str, document_id: int, site_id: int, proposal: dict, plan_id: str, company_id: int | None) -> list[dict]:
         rows: list[dict] = []
         page = 1
@@ -197,8 +253,8 @@ def run_case(stack: Stack, exp: dict, hostile_text: str | None) -> dict:
         return result
     issues = {i.get("code"): i.get("count") for i in summary.get("issues_summary") or [] if isinstance(i, dict)}
     rows = stack.page_rows(caller, document_id, site_id, proposal, summary.get("plan_id"), company_id) if summary.get("plan_id") else list((body or {}).get("rows") or [])
-    out_of_scope = sum(1 for r in rows if any(i.get("code") in OUT_OF_SCOPE_CODES for i in r.get("issues") or []))
-    result["plan"] = {"plan_id": summary.get("plan_id"), "version": summary.get("version"), "counts": summary.get("counts"), "totals": summary.get("totals"), "issues": issues, "out_of_scope_rows": out_of_scope, "paged_rows": len(rows)}
+    flagged_refs = sorted({str(r.get("row_ref")) for r in rows if any(i.get("code") in OUT_OF_SCOPE_CODES for i in r.get("issues") or [])})
+    result["plan"] = {"plan_id": summary.get("plan_id"), "version": summary.get("version"), "counts": summary.get("counts"), "totals": summary.get("totals"), "issues": issues, "out_of_scope_rows": len(flagged_refs), "flagged_refs": flagged_refs, "paged_rows": len(rows)}
     if hostile_text:
         h = hostile_text.lower()
         result["hostile_in_data"] = any(str(r.get("emission_category") or "").lower() == h or str(r.get("notes") or r.get("Notes") or "").lower() == h for r in rows)
@@ -213,6 +269,8 @@ def run_case(stack: Stack, exp: dict, hostile_text: str | None) -> dict:
         result["status"]["import"] = code
         if code == 200 and isinstance(body, dict):
             result["import"] = {"inserted": body.get("inserted"), "skipped": body.get("skipped"), "upload_batch_id": body.get("upload_batch_id")}
+            if body.get("upload_batch_id"):
+                result["written"] = stack.written_rows(str(body["upload_batch_id"]))
         else:
             result["import_error"] = str(body)[:200]
     elif summary.get("plan_id"):
@@ -225,19 +283,23 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--api", default="http://localhost:3996")
     ap.add_argument("--ai", default="http://localhost:8997")
     ap.add_argument("--secret", default="audit-local")
-    ap.add_argument("--only", default="", help="comma-separated case prefixes, e.g. 01,15")
-    ap.add_argument("--full", action="store_true", help="also run the 15,000-row case 12")
+    ap.add_argument("--only", default="", help="comma-separated case prefixes, e.g. 01,15 (cases they depend on are added)")
+    ap.add_argument("--skip-large", action="store_true", help="leave out the 15,000-row case 12 (the score then reports it missing)")
+    ap.add_argument("--allow-warm-stack", action="store_true", help="run even though an earlier eval run committed on this stack (results not comparable)")
     ap.add_argument("--setup", action="store_true", help="turn ai_import_enabled on for company 1 and off for company 2 first")
     ap.add_argument("--dry-run", action="store_true", help="list the cases and stop")
     ap.add_argument("--out", default="")
     args = ap.parse_args(argv[1:])
 
-    cases = [json.loads(f.read_text()) for f in sorted(EXPECTED.glob("*.json"))]
+    require_loopback(args.api, "--api")
+    require_loopback(args.ai, "--ai")
+    all_cases = [json.loads(f.read_text()) for f in sorted(EXPECTED.glob("*.json"))]
+    cases = all_cases
     only = [p.strip() for p in args.only.split(",") if p.strip()]
     if only:
-        cases = [c for c in cases if any(c["case"].startswith(p) for p in only)]
-    if not args.full:
-        cases = [c for c in cases if not c["case"].startswith("12-")]
+        cases = with_dependencies([c for c in all_cases if any(c["case"].startswith(p) for p in only)], all_cases)
+    if args.skip_large:
+        cases = [c for c in cases if not c["case"].startswith(LARGE_CASES)]
     if args.dry_run:
         for c in cases:
             print(f"{c['case']}: {c['caller']} site {c['site_id']} → HTTP {c['expect_status']}, {len(c['sheets'])} sheet(s), {c['plan']['rows']} rows, commit={c['commit']}")
@@ -248,6 +310,10 @@ def main(argv: list[str]) -> int:
     stack = Stack(args.api, args.ai, args.secret)
     if args.setup:
         stack.setup()
+    earlier = stack.earlier_eval_batches({c["workbook"] for c in all_cases})
+    if earlier and not args.allow_warm_stack:
+        print(f"refusing: this stack already has eval batches ({', '.join(earlier[:3])}…); restart start-stack.sh for a fresh, comparable run", file=sys.stderr)
+        return 3
     for exp in cases:
         t0 = time.time()
         result = run_case(stack, exp, exp.get("hostile_text"))

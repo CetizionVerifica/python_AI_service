@@ -76,11 +76,19 @@
   "plan": {
     "rows": 12,
     "out_of_scope_rows": 4,
+    "out_of_scope_refs": [
+      "Travel!A2",
+      "Travel!A3",
+      "Travel!A4",
+      "Travel!A5"
+    ],
+    "out_of_scope_refs_rule": null,
     "issues": {
       "CATEGORY_NOT_ASSIGNED": 4
     },
     "tco2e": null
   },
+  "writable_category_ids": [],
   "commit": true,
   "hostile_text": null,
   "depends_on": null,
