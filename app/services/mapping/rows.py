@@ -18,12 +18,15 @@ from typing import Any, Optional
 import pandas as pd
 
 from app.schemas.mapping import CATEGORY_NOT_ASSIGNED, PIVOT_EMPTY_CELL, SITE_NOT_ALLOWED, MappingProposal, SheetProposal
-from app.services.excel_plan_client import ROWS_PER_PLAN, LocalIssue, SheetRows, _number
+from app.services.excel_plan_client import ROWS_PER_PLAN, TEXT_MAX_CHARS, LocalIssue, SheetRows, _js_len, _number
 from app.services.mapping.context import ACTIVITY_KEY, UNIT_KEY, VALUE_KEY
-from app.services.workbook.reader import Sheet, Workbook, month_of_header
+from app.services.workbook.reader import Sheet, Workbook, month_of_header, unit_tokens_in_header
 
 _ROW_NUM_RE = re.compile(r"!([A-Z]+)(\d+)$")
-_VALUE_WITH_UNIT_RE = re.compile(r"^\s*([+-]?[\d,]*\.?\d+)\s*([A-Za-z³₹$€£]{1,8})?\s*$")
+# "1,200", "1,200 litre", "35 m3", "12.5 nm3": a number, then an optional unit that starts with a letter.
+_VALUE_WITH_UNIT_RE = re.compile(r"^\s*([+-]?[\d,]*\.?\d+)\s*([A-Za-z³₹$€£][A-Za-z0-9³/.]{0,9})?\s*$")
+# Month cells that mean "nothing this month".
+_PIVOT_BLANK = {"-", "–", "—", "na", "n/a", "nil", "none", "nan"}
 
 
 def _row_number(row_ref: str) -> int:
@@ -45,8 +48,10 @@ def _period_for(cell: str, proposal: SheetProposal) -> Optional[dict]:
         text = (cell or "").strip()
         if not text:
             return None
-        m = month_of_header(text)
-        if m and m.get("date") and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        # A full date ("01.04.2025", day first) keeps its day; a month ("Apr-25") is the month's end.
+        full_date = re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{4}|\d{4}[/.]\d{1,2}[/.]\d{1,2}", text)
+        m = None if full_date else month_of_header(text)
+        if m and m.get("date"):
             return {"kind": "monthly", "date": m["date"]}
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
             return {"kind": "monthly", "date": text}
@@ -120,15 +125,14 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
             for col, d in month_cols:
                 text = cells.get(col, "")
                 ref = f"{sheet.name}!{letters.get(col, 'A')}{r['row']}"
-                if not text.strip():
+                if not text.strip() or text.strip().lower() in _PIVOT_BLANK:
                     local.append(_issue(ref, activity_text or None, PIVOT_EMPTY_CELL, "Blank month cell; no row made.", {**cells, "month": col}, "info"))
                     continue
                 value, unit_in_cell = _split_value_unit(text)
-                row = {**base, "row_ref": ref, "period": {"kind": "monthly", "date": d}, "activity_unit": unit or unit_in_cell or _header_unit(sheet, col) or ""}
-                if value is not None:
-                    row["activity_value"] = value
-                else:
-                    row["fields"] = {VALUE_KEY: text}
+                if value is None:
+                    local.append(_issue(ref, activity_text or None, "VALUE_NOT_NUMERIC", "The month cell is not a number.", {**cells, "month": col}))
+                    continue
+                row = {**base, "row_ref": ref, "period": {"kind": "monthly", "date": d}, "activity_unit": unit or unit_in_cell or _header_unit(sheet, col) or "", "activity_value": value}
                 if extra:
                     row["fields"] = {**row.get("fields", {}), **extra}
                 _append(rows, local, row, activity_text, cells)
@@ -139,7 +143,7 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
         value_text = cells.get(value_col, "") if value_col else ""
         value, unit_in_cell = _split_value_unit(value_text) if value_text else (None, None)
         if value_col and value_text and value is None:
-            local.append(_issue(row_ref, activity_text or None, "VALUE_NOT_NUMERIC", f"The activity value {value_text!r} is not a number.", cells))
+            local.append(_issue(row_ref, activity_text or None, "VALUE_NOT_NUMERIC", "The activity value is not a number.", cells))
             continue
         row["activity_unit"] = unit or unit_in_cell or (_header_unit(sheet, value_col) if value_col else None) or _fields_unit(sheet, extra_cols) or ""
         if value is not None:
@@ -158,7 +162,8 @@ def _header_unit(sheet: Sheet, column_name: Optional[str]) -> Optional[str]:
     col = next((c for c in sheet.columns if c.name == column_name), None)
     if col is None:
         return None
-    header_only = [t for t in col.unit_tokens if t in (col.name.lower())]
+    # Only what the header itself says: Column.unit_tokens also holds units seen in cells ("5 t").
+    header_only = unit_tokens_in_header(col.name)
     return header_only[0] if header_only else None
 
 
@@ -174,6 +179,11 @@ def _fields_unit(sheet: Sheet, extra_cols: dict[str, str]) -> Optional[str]:
 def _append(rows: list[dict], local: list[LocalIssue], row: dict, activity_text: str, cells: dict) -> None:
     """The row, or the local issue the plans API would refuse it with."""
     ref = row["row_ref"]
+    texts = [row.get("activity_name") or "", row.get("activity_unit") or ""] + [str(v) for v in (row.get("fields") or {}).values()]
+    if any(_js_len(t) > TEXT_MAX_CHARS for t in texts):
+        # ESG-lite would refuse the whole request for one such row.
+        local.append(_issue(ref, None, "TEXT_TOO_LONG", f"A cell in this row is longer than {TEXT_MAX_CHARS} characters.", cells))
+        return
     if not activity_text:
         local.append(_issue(ref, None, "MISSING_CATEGORY", "No activity wording in this row.", cells))
         return

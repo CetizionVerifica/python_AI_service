@@ -59,6 +59,10 @@ class FakeEsgLite:
             plan_id = f"plan-{len(self.plans) + 1}"
             self.plans[plan_id] = {"rows": body["rows"], "mapping": body.get("mapping")}
             return httpx.Response(201, json=self._plan(plan_id))
+        if path.startswith("/imports/plans/") and request.method == "PATCH":
+            plan_id = path.split("/")[3]
+            self.plans[plan_id].setdefault("matches", []).extend(json.loads(request.content).get("activity_matches") or [])
+            return httpx.Response(200, json=self._plan(plan_id))
         if path.startswith("/imports/plans/") and request.method == "GET":
             plan_id = path.split("/")[3]
             rows = [{"row_ref": r["row_ref"], "state": "ready", "input": r, "result": {"total_tco2e": 1.0}, "issues": []} for r in self.plans[plan_id]["rows"]]
@@ -197,3 +201,36 @@ def test_preview_with_a_proposal_for_another_document_or_site_is_refused(api):
     res = client.post("/v1/excel/preview", json={"document_id": DOC, "proposal": bad}, headers=auth())
     assert res.status_code == 422
     assert not any(r["path"] == "/imports/plans" for r in esg.requests)
+
+
+def test_preview_sends_the_confirmed_activity_matches_to_the_plan(api):
+    client, esg, _ = api
+    proposal = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth()).json()
+    # The user confirms the sheet's "HSD" means the factor "Diesel".
+    assert proposal["sheets"][0]["activities"][0]["sheet_text"] == "HSD"
+    proposal["sheets"][0]["activities"][0]["factor_name"] = "Diesel"
+    res = client.post("/v1/excel/preview", json={"document_id": DOC, "proposal": proposal}, headers=auth())
+    assert res.status_code == 200, res.text
+    (plan,) = esg.plans.values()
+    text = proposal["sheets"][0]["activities"][0]["sheet_text"]
+    assert plan["matches"] == [{"site_id": 2, "category_id": proposal["sheets"][0]["activities"][0]["category_id"], "sheet_name": text, "factor_name": "Diesel"}]
+    # The rows keep the wording as written.
+    assert {r["activity_name"] for r in plan["rows"]} == {text}
+
+
+def test_preview_with_a_proposal_for_a_site_the_caller_does_not_hold_is_forbidden(api):
+    client, esg, state = api
+    proposal = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth()).json()
+    state["principal"] = Principal(kind="user", user_id=2, role="Manager", site_ids=frozenset({7}))
+    res = client.post("/v1/excel/preview", json={"document_id": DOC, "proposal": proposal}, headers=auth())
+    assert res.status_code == 403
+    assert not any(r["path"] == "/imports/plans" for r in esg.requests)
+
+
+def test_rate_limit_needs_a_user_id():
+    from fastapi import HTTPException
+
+    mapping_api.reset_propose_rate()
+    with pytest.raises(HTTPException) as e:
+        mapping_api.check_propose_rate(None)
+    assert e.value.status_code == 403

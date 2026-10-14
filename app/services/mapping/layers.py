@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
-from app.schemas.mapping import MAPPING_CONFIRM_BELOW, MAPPING_DISTINCT_VALUES_PER_COLUMN
+from app.schemas.mapping import MAPPING_CONFIRM_BELOW, MAPPING_DISTINCT_VALUES_PER_COLUMN, MAPPING_TEXT_MAX_CHARS
 from app.services.mapping.context import ACTIVITY_KEY, UNIT_KEY, VALUE_KEY, ActivityLookup, CategoryView, ContextView, FieldSpec
-from app.services.mapping.match import best_match, contains_name, normalise, overlap
+from app.services.mapping.match import best_match, contains_name, names_site, normalise, overlap
 from app.services.mapping.synonyms import FIELD_LABEL_SYNONYMS, part_of_header
 from app.services.workbook.reader import Column, Sheet, month_of_header
 
@@ -85,6 +85,9 @@ class Draft:
             )
         activities = []
         for text, part in self.activities.items():
+            if not _fits(text):
+                # Too long for the contract: left out; its rows reach the plan as TEXT_TOO_LONG.
+                continue
             activities.append(
                 {
                     "sheet_text": text,
@@ -96,6 +99,11 @@ class Draft:
                 }
             )
         category = self.category.value if self.category else None
+        if isinstance(category, dict) and category.get("kind") == "column":
+            category = {**category, "values": [v for v in category["values"] if _fits(v["text"])]}
+        site_column = self.site_column
+        if site_column:
+            site_column = {**site_column, "values": [v for v in site_column["values"] if _fits(v["text"])]}
         period = self.period.value if self.period else None
         required = [self.category.confidence if self.category else 0.0, self.period.confidence if self.period else 0.0]
         for key, spec in self.field_specs.items():
@@ -115,16 +123,26 @@ class Draft:
             "data_rows": self.sheet.data_rows,
             "layout": self.sheet.layout,
             "site_id": self.ctx.site_id,
-            "site_column": self.site_column,
+            "site_column": site_column,
             "category": category,
             "period": period,
             "fields": fields,
             "activities": activities,
-            "not_in_context": list(dict.fromkeys(self.not_in_context)),
+            "not_in_context": [_clip(t) for t in dict.fromkeys(self.not_in_context)][:MAPPING_DISTINCT_VALUES_PER_COLUMN],
             "confidence": round(confidence, 3),
             "source": source,
             "excluded": category is None or period is None,
         }
+
+
+def _fits(text: str) -> bool:
+    return len(text or "") <= MAPPING_TEXT_MAX_CHARS
+
+
+def _clip(text: str) -> str:
+    """For display-only lists (not_in_context): cut to the contract's limit."""
+    text = str(text or "")
+    return text if _fits(text) else text[: MAPPING_TEXT_MAX_CHARS - 1] + "…"
 
 
 def _first_category_id(draft: Draft) -> int:
@@ -215,10 +233,11 @@ def profile_layer(draft: Draft, profiles: list[dict], activities: ActivityLookup
             used = True
 
     cat_ids = {c.category_id for c in ctx.categories}
+    wordings = _wordings(draft)
     for a in saved.get("activities") or []:
         text, factor = a.get("sheet_text"), a.get("factor_name")
         cid = a.get("category_id")
-        if text in draft.activities and factor and cid in cat_ids and factor in activities.names(cid, factor):
+        if text in wordings and factor and cid in cat_ids and factor in activities.names(cid, factor):
             draft.activities[text] = Part(factor, 1.0, "profile")
             draft.activity_categories[text] = int(cid)
             used = True
@@ -287,8 +306,9 @@ def rules_layer(draft: Draft, activities: ActivityLookup) -> None:
     if draft.category is not None and not draft.category.resolved and _category_from_activities(draft, activities):
         draft.field_specs = _field_specs(draft)
         _field_rules(draft, parts_by_column, taken)
-        draft.activities = {}
-        draft.activity_categories = {}
+        # The category changed: match the wordings again, keeping what a saved profile confirmed.
+        draft.activities = {t: p for t, p in draft.activities.items() if p.source == "profile"}
+        draft.activity_categories = {t: c for t, c in draft.activity_categories.items() if t in draft.activities}
         _activity_rules(draft, activities)
 
 
@@ -318,7 +338,7 @@ def _category_from_activities(draft: Draft, activities: ActivityLookup) -> bool:
 def _site_column(sheet: Sheet, column_name: str, ctx: ContextView) -> dict:
     values = []
     for text in distinct_values(sheet, column_name):
-        values.append({"text": text, "matches_site": contains_name(text, ctx.site_name) or contains_name(ctx.site_name, text)})
+        values.append({"text": text, "matches_site": names_site(text, ctx.site_name, ctx.other_site_names)})
     return {"column": column_name, "values": values}
 
 
@@ -557,8 +577,10 @@ def _unit_words() -> set[str]:
     return _UNIT_WORDS
 
 
-def _activity_rules(draft: Draft, activities: ActivityLookup) -> None:
-    sheet, ctx = draft.sheet, draft.ctx
+def _wordings(draft: Draft) -> dict[str, Optional[int]]:
+    """The sheet's distinct activity wordings with the category each belongs to
+    (None when the category column gave that row no category)."""
+    sheet = draft.sheet
     act_part = draft.fields.get(ACTIVITY_KEY)
     cat = draft.category.value if draft.category else None
     cat_column = cat.get("column") if isinstance(cat, dict) and cat.get("kind") == "column" else None
@@ -574,9 +596,14 @@ def _activity_rules(draft: Draft, activities: ActivityLookup) -> None:
             wordings[text] = cat_by_text.get(r["cells"].get(cat_column, "")) if cat_column else fixed_id
             if len(wordings) >= MAPPING_DISTINCT_VALUES_PER_COLUMN:
                 break
-    else:
-        # No activity column: the sheet (or its category) is one activity, named by the sheet.
-        wordings = {sheet.name: fixed_id}
+        return wordings
+    # No activity column: the sheet (or its category) is one activity, named by the sheet.
+    return {sheet.name: fixed_id}
+
+
+def _activity_rules(draft: Draft, activities: ActivityLookup) -> None:
+    ctx = draft.ctx
+    wordings = _wordings(draft)
     for text, cid in wordings.items():
         if text in draft.activities and draft.activities[text].resolved:
             continue

@@ -53,3 +53,29 @@ def contains_name(text: str, name: str) -> bool:
     """Whether a site or category name is written inside the text ("Plant 2 - Hyd" names "Plant 2")."""
     t, n = normalise(text), normalise(name)
     return bool(n) and (t == n or f" {n} " in f" {t} ")
+
+
+# Words that only say "this is a site": "Pune plant" names the site "Pune".
+SITE_GENERIC_WORDS = {"plant", "site", "unit", "factory", "works", "office", "location", "facility", "branch", "campus", "mill"}
+
+
+def _site_core(text: str) -> set[str]:
+    return {t for t in _WORD_RE.findall(str(text or "").lower()) if t not in SITE_GENERIC_WORDS}
+
+
+def names_site(text: str, site_name: str, other_site_names: Iterable[str] = ()) -> bool:
+    """Whether a site-column cell names the chosen site. Strict on purpose: the
+    same name (normalised), or the same words once generic ones ("plant",
+    "site", ...) are left out. "Pune 2" or "Plant 2 - Hyd" is not "Pune" or
+    "Plant 2": such rows are flagged, never assumed to be this site, and the
+    user can confirm the value. A text that is one of the caller's other sites
+    is never this site."""
+    t = normalise(text)
+    if not t:
+        return False
+    if t == normalise(site_name):
+        return True
+    if any(t == normalise(o) for o in other_site_names):
+        return False
+    core = _site_core(text)
+    return bool(core) and core == _site_core(site_name)

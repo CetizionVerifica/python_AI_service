@@ -25,14 +25,19 @@ _rate: dict[int, list[float]] = {}
 
 
 def check_propose_rate(user_id: Optional[int]) -> None:
+    """Every attempt counts, failed ones too: a failing call still reads the
+    file and may reach the model. The window is per process (see CLAUDE.md)."""
+    if not user_id:
+        # Only signed-in users reach /propose; never share one bucket between callers without an id.
+        raise HTTPException(status_code=403, detail={"code": "IMPORT_FORBIDDEN", "message": "Sign in to use the smart import."})
     now = time.monotonic()
     window = MAPPING_PROPOSE_WINDOW_MINUTES * 60
     with _rate_lock:
-        stamps = [t for t in _rate.get(int(user_id or 0), []) if now - t < window]
+        stamps = [t for t in _rate.get(int(user_id), []) if now - t < window]
         if len(stamps) >= MAPPING_PROPOSE_PER_WINDOW:
             raise HTTPException(status_code=429, detail={"code": "RATE_LIMITED", "message": f"At most {MAPPING_PROPOSE_PER_WINDOW} mapping proposals per {MAPPING_PROPOSE_WINDOW_MINUTES} minutes. Try again in a little while."})
         stamps.append(now)
-        _rate[int(user_id or 0)] = stamps
+        _rate[int(user_id)] = stamps
 
 
 def reset_propose_rate() -> None:
@@ -79,12 +84,18 @@ def propose_document(client: PlanClient, *, document_id: int, site_id: int, comp
     return propose(workbook, document_id, ctx, profiles, activities, model=model_for_propose())
 
 
-def sheet_rows_from_proposal(payload: dict) -> tuple[SheetRows, dict]:
-    """``(rows, ctx)`` for ``/preview`` and ``/import`` when the payload carries a confirmed ``proposal``."""
+def sheet_rows_from_proposal(payload: dict, principal=None) -> tuple[SheetRows, dict]:
+    """``(rows, ctx)`` for ``/preview`` and ``/import`` when the payload carries a confirmed ``proposal``.
+
+    The proposal's ``site_id`` must be one of the caller's sites, checked here
+    as the top-level ``site_id`` is by ``enforce_site_scope`` (ESG-lite checks
+    it again), since a Superadmin's ``company_id`` is looked up from it."""
     try:
         proposal = MappingProposal.model_validate(payload.get("proposal"))
     except ValidationError as e:
         raise ValueError(f"proposal is not a valid mapping: {e.errors()[0].get('msg') if e.errors() else 'invalid'}")
+    if principal is not None and not principal.can_access_site(proposal.site_id):
+        raise HTTPException(status_code=403, detail={"code": "IMPORT_FORBIDDEN", "message": "You cannot import into this site."})
     document_id = int(payload["document_id"])
     if proposal.document_id != document_id:
         raise ValueError("The proposal is for another document.")

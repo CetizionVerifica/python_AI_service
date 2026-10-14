@@ -135,6 +135,14 @@ class PlanClient:
     def append_rows(self, plan_id: str, version: int, rows: list[dict]) -> dict:
         return self._call("POST", f"/imports/plans/{plan_id}/rows", json={"version": version, "rows": rows})
 
+    def patch_plan(self, plan_id: str, version: int, *, activity_matches: Optional[list[dict]] = None, changes: Optional[list[dict]] = None) -> dict:
+        body: dict[str, Any] = {"version": version}
+        if activity_matches:
+            body["activity_matches"] = activity_matches
+        if changes:
+            body["changes"] = changes
+        return self._call("PATCH", f"/imports/plans/{plan_id}", json=body)
+
     def get_plan(self, plan_id: str, page: int = 1, page_size: int = 50, state: Optional[str] = None, code: Optional[str] = None) -> dict:
         params: dict[str, Any] = {"page": page, "page_size": min(max(int(page_size), 1), PAGE_SIZE_MAX)}
         if state:
@@ -367,6 +375,43 @@ def create_plan_from_rows(client: PlanClient, source_name: str, rows: list[dict]
     plan = client.create_plan(source_name, chunks[0], company_id, mapping=mapping)
     for chunk in chunks[1:]:
         plan = client.append_rows(plan["plan_id"], int(plan["version"]), chunk)
+    if mapping:
+        plan = apply_activity_matches(client, plan, activity_matches_of(mapping))
+    return plan
+
+
+def activity_matches_of(mapping: dict) -> list[dict]:
+    """The confirmed "sheet wording → factor name" matches of a MappingProposal,
+    as plan ``activity_matches``. Rows keep the sheet's wording as
+    ``activity_name`` (contract: as written); the plan match tells ESG-lite
+    which factor it means, the same way Claude's ``update_import_plan`` does."""
+    out: dict[tuple, dict] = {}
+    for sheet in mapping.get("sheets") or []:
+        if sheet.get("excluded"):
+            continue
+        for a in sheet.get("activities") or []:
+            text, factor = (a.get("sheet_text") or "").strip(), (a.get("factor_name") or "").strip()
+            if not text or not factor or text == factor:
+                continue
+            if _js_len(text) > TEXT_MAX_CHARS or _js_len(factor) > TEXT_MAX_CHARS:
+                continue
+            key = (int(sheet["site_id"]), int(a["category_id"]), text)
+            out[key] = {"site_id": key[0], "category_id": key[1], "sheet_name": text, "factor_name": factor, **({"save_mapping": True} if a.get("save_mapping") else {})}
+    return list(out.values())
+
+
+def apply_activity_matches(client: PlanClient, plan: dict, matches: list[dict]) -> dict:
+    """PATCH the plan with the matches, 2,000 at a time. When ESG-lite refuses a
+    ``save_mapping`` (a mapping already exists, or the role may not save one),
+    the matches are sent again without it: the plan match still applies."""
+    for chunk in _chunks(matches):
+        try:
+            plan = client.patch_plan(plan["plan_id"], int(plan["version"]), activity_matches=chunk)
+        except EsgLiteError as e:
+            if not any(m.get("save_mapping") for m in chunk) or e.code not in ("IMPORT_VALIDATION", "IMPORT_FORBIDDEN"):
+                raise
+            logger.info(f"plan {plan['plan_id']}: save_mapping refused ({e.code}); matches kept on the plan only")
+            plan = client.patch_plan(plan["plan_id"], int(plan["version"]), activity_matches=[{k: v for k, v in m.items() if k != "save_mapping"} for m in chunk])
     return plan
 
 
