@@ -34,7 +34,7 @@ def propose(workbook: Workbook, document_id: int, ctx: ContextView, profiles: li
 
             calls += llm_layer(draft, activities, model)
         sheets.append(draft.to_proposal())
-    telemetry = {"name": getattr(model, "name", "none") if model is not None else "none", "calls": calls, "cached_profile_hits": profile_hits}
+    telemetry = {"name": str(getattr(model, "name", "none"))[:100] if model is not None else "none", "calls": calls, "cached_profile_hits": profile_hits}
     proposal = MappingProposal.model_validate({"document_id": int(document_id), "site_id": ctx.site_id, "sheets": sheets, "model": telemetry})
     logger.info(f"propose document={document_id} site={ctx.site_id} sheets={len(sheets)} profile_hits={profile_hits} model_calls={calls}")
     return proposal

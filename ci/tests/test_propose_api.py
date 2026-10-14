@@ -197,3 +197,21 @@ def test_preview_with_a_proposal_for_another_document_or_site_is_refused(api):
     res = client.post("/v1/excel/preview", json={"document_id": DOC, "proposal": bad}, headers=auth())
     assert res.status_code == 422
     assert not any(r["path"] == "/imports/plans" for r in esg.requests)
+
+
+def test_propose_uses_the_configured_model_and_reports_it(api, monkeypatch):
+    from app.services.mapping.model import ModelAnswer
+
+    class Model:
+        name = "fake-claude"
+
+        def propose(self, system, user):
+            assert "Plant 2" in user and "Zed" not in user
+            return ModelAnswer.model_validate({"category": {"kind": "fixed", "category_id": 3, "confidence": 0.9}})
+
+    monkeypatch.setattr(mapping_api, "model_for_propose", lambda: Model())
+    client, _, state = api
+    state["file"] = "09-two-row-merged-header.xlsx"
+    body = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth()).json()
+    assert body["model"] == {"name": "fake-claude", "calls": 1, "cached_profile_hits": 0}
+    assert body["sheets"][0]["category"]["source"] == "llm" and body["sheets"][0]["category"]["id"] == 3

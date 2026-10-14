@@ -215,10 +215,11 @@ def profile_layer(draft: Draft, profiles: list[dict], activities: ActivityLookup
             used = True
 
     cat_ids = {c.category_id for c in ctx.categories}
+    wordings = _wordings(draft)
     for a in saved.get("activities") or []:
         text, factor = a.get("sheet_text"), a.get("factor_name")
         cid = a.get("category_id")
-        if text in draft.activities and factor and cid in cat_ids and factor in activities.names(cid, factor):
+        if text in wordings and factor and cid in cat_ids and factor in activities.names(cid, factor):
             draft.activities[text] = Part(factor, 1.0, "profile")
             draft.activity_categories[text] = int(cid)
             used = True
@@ -557,8 +558,10 @@ def _unit_words() -> set[str]:
     return _UNIT_WORDS
 
 
-def _activity_rules(draft: Draft, activities: ActivityLookup) -> None:
-    sheet, ctx = draft.sheet, draft.ctx
+def _wordings(draft: Draft) -> dict[str, Optional[int]]:
+    """The sheet's distinct activity wordings with the category each belongs to
+    (None when the category column gave that row no category)."""
+    sheet = draft.sheet
     act_part = draft.fields.get(ACTIVITY_KEY)
     cat = draft.category.value if draft.category else None
     cat_column = cat.get("column") if isinstance(cat, dict) and cat.get("kind") == "column" else None
@@ -574,9 +577,14 @@ def _activity_rules(draft: Draft, activities: ActivityLookup) -> None:
             wordings[text] = cat_by_text.get(r["cells"].get(cat_column, "")) if cat_column else fixed_id
             if len(wordings) >= MAPPING_DISTINCT_VALUES_PER_COLUMN:
                 break
-    else:
-        # No activity column: the sheet (or its category) is one activity, named by the sheet.
-        wordings = {sheet.name: fixed_id}
+        return wordings
+    # No activity column: the sheet (or its category) is one activity, named by the sheet.
+    return {sheet.name: fixed_id}
+
+
+def _activity_rules(draft: Draft, activities: ActivityLookup) -> None:
+    ctx = draft.ctx
+    wordings = _wordings(draft)
     for text, cid in wordings.items():
         if text in draft.activities and draft.activities[text].resolved:
             continue
