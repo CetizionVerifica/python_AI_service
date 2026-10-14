@@ -131,7 +131,9 @@
           ],
           "fill_ratio": 1.0,
           "numeric_ratio": 1.0,
-          "unit_tokens": [],
+          "unit_tokens": [
+            "kwh"
+          ],
           "month": null
         }
       ],

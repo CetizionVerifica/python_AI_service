@@ -259,6 +259,9 @@ def _month_end(year: int, month: int) -> str:
 
 def unit_tokens_in_header(name: str) -> list[str]:
     out: list[str] = []
+    bare = str(name).strip().lower()
+    if bare in _UNIT_SET:
+        out.append(bare)
     for m in _HEADER_UNIT_RE.finditer(str(name)):
         token = next((g for g in m.groups() if g), "")
         token = token.strip().lower()
