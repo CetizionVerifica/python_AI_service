@@ -233,8 +233,9 @@ def preview(payload: dict, request: Request, principal: Principal = Depends(requ
 def bulk_import(payload: dict, request: Request, principal: Principal = Depends(require_user)):
     """Commit the previewed plan (``plan_id`` + ``version``) as one pending batch.
 
-    Without a ``plan_id`` the sheet is planned first and committed at once.
-    ESG-lite writes the rows; this service only marks the file imported and
+    Without a ``plan_id`` the sheet is planned first and committed at once; with
+    one, the plan must be the ``bulk_upload`` plan ``/preview`` made from this
+    file (same name, same row count), else 422. ESG-lite writes the rows; this service only marks the file imported and
     deletes it. A file is imported once: a second call answers 409.
     """
     document_id = _own_document(payload.get("document_id"), principal)
@@ -257,6 +258,8 @@ def bulk_import(payload: dict, request: Request, principal: Principal = Depends(
                 company_id = company_id_for_site(ctx["site_id"]) if principal.is_superadmin else None
                 plan = plans.create_plan_from_rows(client, ctx["source_name"], sheet.rows, company_id)
                 plan_id, version = plan["plan_id"], plan["version"]
+            else:
+                plans.check_plan_is_this_sheet(client, str(plan_id), source_name=ctx["source_name"], row_count=len(sheet.rows))
             if version is None:
                 raise ValueError("version is required with plan_id")
             res = plans.commit_plan(

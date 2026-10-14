@@ -51,6 +51,8 @@ class FakeEsgLite:
             "totals": {"tco2e": round(sum(r["result"]["total_tco2e"] for r in ready), 6), "by_category": [], "by_month": []},
             "issues_summary": [{"code": "UNKNOWN_ACTIVITY", "count": len(issue), "example_row_refs": [r["row_ref"] for r in issue][:5]}] if issue else [],
             "expires_at": "2026-01-01T00:00:00.000Z",
+            "channel": p.get("channel", "bulk_upload"),
+            "source_name": p.get("source_name"),
             **({"committed": p["committed"]} if p.get("committed") else {}),
         }
 
@@ -87,7 +89,7 @@ class FakeEsgLite:
                 return httpx.Response(413, json={"code": "IMPORT_TOO_MANY_ROWS", "message": "Too many rows"})
             self.counter += 1
             plan_id = f"00000000-0000-4000-8000-{self.counter:012d}"
-            self.plans[plan_id] = {"version": 1, "status": "draft", "rows": [self.plan_row(r) for r in body["rows"]], "source_name": body["source_name"], "company_id": body.get("company_id")}
+            self.plans[plan_id] = {"version": 1, "status": "draft", "rows": [self.plan_row(r) for r in body["rows"]], "source_name": body["source_name"], "channel": body.get("channel"), "company_id": body.get("company_id")}
             return httpx.Response(201, json={**self._plan(plan_id), "rows": self.plans[plan_id]["rows"][:50], "page": 1, "page_size": 50, "total_rows": len(body["rows"])})
         parts = path.split("/")
         plan_id = parts[3] if len(parts) > 3 else None
@@ -467,6 +469,30 @@ def test_import_commits_the_previewed_plan_once_and_writes_no_emission_rows(api,
     # A second import of the same file is refused.
     again = client.post("/v1/excel/import", json=body(plan_id=plan["plan_id"], version=plan["version"]), headers=headers)
     assert again.status_code == 409
+
+
+def test_import_refuses_a_plan_that_is_not_this_files(api, throwaway_db, world):
+    """A plan_id is only committed with the document it was previewed from: the
+    commit consumes that file and reports its counts, so another file's plan or a
+    Claude draft is refused before ESG-lite is asked to commit anything."""
+    client, esg = api
+    headers = bearer(SUPERADMIN, "Superadmin")
+    other = client.post("/v1/excel/preview", json=body(document_id=OTHER_DOC), headers=headers).json()["plan"]
+    res = client.post("/v1/excel/import", json=body(plan_id=other["plan_id"], version=other["version"]), headers=headers)
+    assert res.status_code == 422, res.text
+    assert "not made from this file" in res.json()["detail"]
+    # A Claude draft with this file's name and row count is not a bulk upload either.
+    esg.plans["00000000-0000-4000-8000-00000000mcp1"] = {**esg.plans[other["plan_id"]], "source_name": "fuel-june.csv", "channel": "mcp"}
+    res = client.post("/v1/excel/import", json=body(plan_id="00000000-0000-4000-8000-00000000mcp1", version=1), headers=headers)
+    assert res.status_code == 422, res.text
+    assert not [r for r in esg.requests if r["path"].endswith("/commit")]
+    assert world["deleted"] == []
+    with throwaway_db.cursor() as cur:
+        cur.execute("SELECT status FROM uploaded_documents WHERE id = %s", (DOC,))
+        assert cur.fetchone()[0] == "uploaded"
+    # The file's own plan still goes through.
+    mine = client.post("/v1/excel/preview", json=body(), headers=headers).json()["plan"]
+    assert client.post("/v1/excel/import", json=body(plan_id=mine["plan_id"], version=mine["version"]), headers=headers).status_code == 200
 
 
 def test_a_failed_file_delete_still_marks_the_document_imported(world, throwaway_db, monkeypatch):
