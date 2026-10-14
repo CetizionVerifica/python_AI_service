@@ -1,6 +1,7 @@
 """XI0: the mapping contract models parse the fixtures shared with ESG-lite
 (ci/fixtures/xi0) exactly as the zod schemas do. No database, no network."""
 import copy
+import hashlib
 import json
 
 import pytest
@@ -14,6 +15,35 @@ XI0 = FIXTURES / "xi0"
 
 def load(name: str) -> dict:
     return json.loads((XI0 / name).read_text())
+
+
+# sha256 of each shared fixture. ESG-lite ci/unit/xi0-mapping.test.cjs pins the
+# same values, so the two copies cannot drift apart silently. Update both when
+# a fixture changes on purpose.
+FIXTURE_SHA256 = {
+    "profile-valid.json": "d46cff40ae067d8345351ae493d9bc480662ba8d2a177b9a34daf2ff8a0e4b37",
+    "proposal-bad-fingerprint.json": "4d5cbbc0f82642ab5945a0d4532011e487be08f3288bcc22f6f996dc97682805",
+    "proposal-confidence-over-1.json": "b156638fe1d1af27ff29a4e97f1951b66cff6b7ea3d0c5d84f11e2d568fc93ff",
+    "proposal-other-site.json": "55986fef5e9685393ddf2fbcfdb36a55e4d3b24025efb74ce2063392a9a6f85c",
+    "proposal-valid.json": "0635d17429adcd9276527cbc83c9be1beadf97ef4b2322e336a11f16e2b54a95",
+    "row-with-meta.json": "50de2a7136e885fd8e38cda815d07d43d2a1b32e244e9d52cff1f9f2c7d47c48",
+}
+
+
+def test_shared_fixtures_are_byte_identical_to_the_esg_lite_copies():
+    present = sorted(p.name for p in XI0.glob("*.json"))
+    assert present == sorted(FIXTURE_SHA256)
+    for name, sha in FIXTURE_SHA256.items():
+        actual = hashlib.sha256((XI0 / name).read_bytes()).hexdigest()
+        assert actual == sha, f"{name} changed; update the pin here and in ESG-lite"
+
+
+def test_profile_id_accepts_either_uuid_case():
+    profile = load("profile-valid.json")
+    upper = dict(profile, id=profile["id"].upper())
+    assert m.MappingProfile.model_validate(upper).id == profile["id"].upper()
+    with pytest.raises(ValidationError):
+        m.MappingProfile.model_validate(dict(profile, id="not-a-uuid"))
 
 
 def test_valid_proposal_parses_and_every_sheet_is_for_the_chosen_site():
