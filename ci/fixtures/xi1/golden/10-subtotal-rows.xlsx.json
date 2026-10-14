@@ -1,0 +1,100 @@
+{
+  "name": "10-subtotal-rows.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "Ledger",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Month",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 6,
+          "samples": [
+            "Jan-25",
+            "Feb-25",
+            "Mar-25",
+            "Apr-25",
+            "May-25"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Item",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Diesel"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Qty",
+          "letter": "C",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "100",
+            "101",
+            "102"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Unit",
+          "letter": "D",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "litre"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [
+        {
+          "row": 5,
+          "reason": "total"
+        },
+        {
+          "row": 9,
+          "reason": "total"
+        },
+        {
+          "row": 10,
+          "reason": "blank"
+        },
+        {
+          "row": 11,
+          "reason": "total"
+        }
+      ],
+      "layout": "rows",
+      "fingerprint": "ab568b3b0985e2dd1c8d2108f777b87449cc7ad6e9c734f488c68a7c867a1309",
+      "data_rows": 6,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Ledger!A2",
+        "Ledger!A3",
+        "Ledger!A4"
+      ]
+    }
+  ]
+}

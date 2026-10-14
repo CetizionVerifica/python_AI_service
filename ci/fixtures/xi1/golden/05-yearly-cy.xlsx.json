@@ -1,0 +1,90 @@
+{
+  "name": "05-yearly-cy.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "CY2024",
+      "index": 0,
+      "header_row": 2,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Category",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 3,
+          "samples": [
+            "Stationary combustion",
+            "Mobile combustion",
+            "Purchased electricity"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Activity",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 3,
+          "samples": [
+            "Natural gas",
+            "Petrol",
+            "Grid"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Annual quantity",
+          "letter": "C",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "120000",
+            "3400",
+            "560000"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Unit",
+          "letter": "D",
+          "dtype": "text",
+          "distinct": 3,
+          "samples": [
+            "SCM",
+            "litre",
+            "kWh"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [
+        {
+          "row": 6,
+          "reason": "total"
+        }
+      ],
+      "layout": "rows",
+      "fingerprint": "a1b8a3295f4bb5522c924b219067b8f9c6f65357d5afdf07e626ff3991b00317",
+      "data_rows": 3,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "CY2024!A3",
+        "CY2024!A4",
+        "CY2024!A5"
+      ]
+    }
+  ]
+}

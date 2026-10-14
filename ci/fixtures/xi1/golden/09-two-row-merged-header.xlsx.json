@@ -1,0 +1,131 @@
+{
+  "name": "09-two-row-merged-header.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "Energy",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 2,
+      "columns": [
+        {
+          "name": "Site",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Plant 2"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Period",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 6,
+          "samples": [
+            "Jan 2025",
+            "Feb 2025",
+            "Mar 2025",
+            "Apr 2025",
+            "May 2025"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Electricity / kWh",
+          "letter": "C",
+          "dtype": "number",
+          "distinct": 6,
+          "samples": [
+            "20000",
+            "20001",
+            "20002",
+            "20003",
+            "20004"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [
+            "kwh"
+          ],
+          "month": null
+        },
+        {
+          "name": "Electricity / INR",
+          "letter": "D",
+          "dtype": "number",
+          "distinct": 6,
+          "samples": [
+            "150000",
+            "150001",
+            "150002",
+            "150003",
+            "150004"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [
+            "inr"
+          ],
+          "month": null
+        },
+        {
+          "name": "Diesel / Litre",
+          "letter": "E",
+          "dtype": "number",
+          "distinct": 6,
+          "samples": [
+            "800",
+            "801",
+            "802",
+            "803",
+            "804"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [
+            "litre"
+          ],
+          "month": null
+        },
+        {
+          "name": "Diesel / INR",
+          "letter": "F",
+          "dtype": "number",
+          "distinct": 6,
+          "samples": [
+            "72000",
+            "72001",
+            "72002",
+            "72003",
+            "72004"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [
+            "inr"
+          ],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "c5dbec53899fef1d670ccb9ef60ac3f2b44048fc4a8f755a41e15128cee34a6f",
+      "data_rows": 6,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Energy!A3",
+        "Energy!A4",
+        "Energy!A5"
+      ]
+    }
+  ]
+}

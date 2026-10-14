@@ -1,0 +1,112 @@
+{
+  "name": "03-multi-site-one-sheet.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "All plants",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Plant",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 2,
+          "samples": [
+            "Plant 2",
+            "Plant 9"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Category",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Stationary combustion"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Month",
+          "letter": "C",
+          "dtype": "text",
+          "distinct": 12,
+          "samples": [
+            "Jan 2025",
+            "Feb 2025",
+            "Mar 2025",
+            "Apr 2025",
+            "May 2025"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Fuel",
+          "letter": "D",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Diesel"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Qty",
+          "letter": "E",
+          "dtype": "number",
+          "distinct": 12,
+          "samples": [
+            "500",
+            "501",
+            "502",
+            "503",
+            "504"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "UOM",
+          "letter": "F",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "litre"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "83bdcf39fde33e7bba268753ada677bcfa38653d518ec6f240a54f5fc34ea0c3",
+      "data_rows": 12,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "All plants!A2",
+        "All plants!A3",
+        "All plants!A4"
+      ]
+    }
+  ]
+}

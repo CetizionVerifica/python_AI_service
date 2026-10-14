@@ -1,0 +1,114 @@
+{
+  "name": "12-large-ledger.csv",
+  "ext": "csv",
+  "sheets": [
+    {
+      "name": "12-large-ledger",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Date",
+          "letter": "A",
+          "dtype": "date",
+          "distinct": 336,
+          "samples": [
+            "2025-01-01",
+            "2025-01-02",
+            "2025-01-03",
+            "2025-01-04",
+            "2025-01-05"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Site",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Plant 2"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Category",
+          "letter": "C",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Mobile combustion"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Activity",
+          "letter": "D",
+          "dtype": "text",
+          "distinct": 3,
+          "samples": [
+            "CNG",
+            "Diesel",
+            "Petrol"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Value",
+          "letter": "E",
+          "dtype": "number",
+          "distinct": 990,
+          "samples": [
+            "124",
+            "291",
+            "152",
+            "768",
+            "442"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Unit",
+          "letter": "F",
+          "dtype": "text",
+          "distinct": 2,
+          "samples": [
+            "litre",
+            "kg"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "71518cac4d861f7411b41ba0796f8e26c6c06bc1aa9a166fde509a4f6556a780",
+      "data_rows": 15000,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "12-large-ledger!A2",
+        "12-large-ledger!A3",
+        "12-large-ledger!A4"
+      ]
+    }
+  ]
+}
