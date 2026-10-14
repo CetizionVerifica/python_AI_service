@@ -173,8 +173,10 @@ class PlanClient:
         res = self._call("GET", "/imports/context/activities", params=params)
         return list(res) if isinstance(res, list) else list(res.get("activities") or res.get("items") or [])
 
-    def get_mapping_profiles(self, fingerprint: str, site_id: int, company_id: Optional[int] = None) -> list[dict]:
-        """``GET /imports/mapping-profiles?fingerprint=`` (XI3). Until XI3 is deployed the route is a 404: no profiles."""
+    def get_mapping_profiles(self, fingerprint: str, site_id: int, company_id: Optional[int] = None) -> Optional[list[dict]]:
+        """``GET /imports/mapping-profiles?fingerprint=`` (XI3). None when the route is a 404 (XI3 not
+        deployed): then nothing has checked the client's smart-import switch, and the caller must not
+        send the sheet to a model."""
         params: dict[str, Any] = {"fingerprint": fingerprint, "site_id": int(site_id)}
         if company_id is not None:
             params["company_id"] = company_id
@@ -182,7 +184,7 @@ class PlanClient:
             res = self._call("GET", "/imports/mapping-profiles", params=params)
         except EsgLiteError as e:
             if e.status == 404:
-                return []
+                return None
             raise
         return list(res) if isinstance(res, list) else list(res.get("profiles") or res.get("items") or [])
 

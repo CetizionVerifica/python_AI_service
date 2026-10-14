@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     # caller's own token. Same host the browser calls (VITE_API_URL in the FE).
     ESG_LITE_API_URL: str = "http://localhost:3000"
 
+    # Smart Excel import mapping model (XI2). The model layer runs only for the
+    # parts the saved profile and the rules could not resolve. "anthropic"
+    # (Claude through the Anthropic API, Shyam's decision 2) needs
+    # ANTHROPIC_API_KEY; without it, or with "none", the engine is rules only.
+    # "openrouter" reuses the OCR client above (OPENROUTER_MODEL).
+    MAPPING_MODEL_PROVIDER: str = "anthropic"
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MAPPING_MODEL: str = "claude-sonnet-5-5"
+    MAPPING_MODEL_TIMEOUT_S: float = 60.0
+
     # Cloudinary
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""

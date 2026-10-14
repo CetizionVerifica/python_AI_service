@@ -30,6 +30,7 @@ class FakeEsgLite:
         self.profiles: list[dict] = []
         self.plans: dict[str, dict] = {}
         self.disabled = False
+        self.no_profiles_route = False
 
     def transport(self):
         return httpx.MockTransport(self.handle)
@@ -51,6 +52,8 @@ class FakeEsgLite:
             q = request.url.params.get("q", "").lower()
             rows = [{"name": n, "kind": "factor", "units": [], "latest_year": 2025} for n in names.get(cid, []) if not q or q in n.lower()]
             return httpx.Response(200, json=rows)
+        if path == "/imports/mapping-profiles" and self.no_profiles_route:
+            return httpx.Response(404, json={"message": "Not found"})
         if path == "/imports/mapping-profiles":
             fp = request.url.params.get("fingerprint")
             return httpx.Response(200, json=[p for p in self.profiles if p["fingerprint"] == fp])
@@ -203,6 +206,24 @@ def test_preview_with_a_proposal_for_another_document_or_site_is_refused(api):
     assert not any(r["path"] == "/imports/plans" for r in esg.requests)
 
 
+def test_propose_uses_the_configured_model_and_reports_it(api, monkeypatch):
+    from app.services.mapping.model import ModelAnswer
+
+    class Model:
+        name = "fake-claude"
+
+        def propose(self, system, user):
+            assert "Plant 2" in user and "Zed" not in user
+            return ModelAnswer.model_validate({"category": {"kind": "fixed", "category_id": 3, "confidence": 0.9}})
+
+    monkeypatch.setattr(mapping_api, "model_for_propose", lambda: Model())
+    client, _, state = api
+    state["file"] = "09-two-row-merged-header.xlsx"
+    body = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth()).json()
+    assert body["model"] == {"name": "fake-claude", "calls": 1, "cached_profile_hits": 0}
+    assert body["sheets"][0]["category"]["source"] == "llm" and body["sheets"][0]["category"]["id"] == 3
+
+
 def test_preview_sends_the_confirmed_activity_matches_to_the_plan(api):
     client, esg, _ = api
     proposal = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth()).json()
@@ -234,3 +255,23 @@ def test_rate_limit_needs_a_user_id():
     with pytest.raises(HTTPException) as e:
         mapping_api.check_propose_rate(None)
     assert e.value.status_code == 403
+
+
+def test_no_model_call_when_esg_lite_has_no_mapping_profiles_route(api, monkeypatch):
+    """Without XI3's route nothing has checked the client's smart-import switch: rules only."""
+    calls = []
+
+    class Model:
+        name = "fake-claude"
+
+        def propose(self, system, user):
+            calls.append(user)
+            raise AssertionError("the model must not be called")
+
+    monkeypatch.setattr(mapping_api, "model_for_propose", lambda: Model())
+    client, esg, state = api
+    esg.no_profiles_route = True
+    state["file"] = "09-two-row-merged-header.xlsx"
+    res = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth())
+    assert res.status_code == 200, res.text
+    assert calls == [] and res.json()["model"] == {"name": "none", "calls": 0, "cached_profile_hits": 0}
