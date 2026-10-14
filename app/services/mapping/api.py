@@ -66,7 +66,15 @@ def model_for_propose():
     return configured_model()
 
 
-def propose_document(client: PlanClient, *, document_id: int, site_id: int, company_id: Optional[int]) -> MappingProposal:
+def propose_document(
+    client: PlanClient,
+    *,
+    document_id: int,
+    site_id: int,
+    company_id: Optional[int],
+    sheet_categories: Optional[dict[str, int]] = None,
+    only_sheets: Optional[list[str]] = None,
+) -> MappingProposal:
     workbook, _ = load_workbook_for(document_id)
     if not workbook.readable_sheets:
         raise ValueError("The file has no sheet with at least two data rows.")
@@ -79,9 +87,14 @@ def propose_document(client: PlanClient, *, document_id: int, site_id: int, comp
         raise ValueError("This site has no categories assigned to import into.")
     profiles: list[dict] = []
     for sheet in workbook.readable_sheets:
+        if only_sheets is not None and sheet.name not in only_sheets:
+            continue
         profiles.extend(client.get_mapping_profiles(sheet.fingerprint, site_id, company_id))
     activities = ActivityLookup(client, site_id, company_id)
-    return propose(workbook, document_id, ctx, profiles, activities, model=model_for_propose())
+    return propose(
+        workbook, document_id, ctx, profiles, activities, model=model_for_propose(),
+        sheet_categories=sheet_categories, only_sheets=only_sheets,
+    )
 
 
 def sheet_rows_from_proposal(payload: dict, principal=None) -> tuple[SheetRows, dict]:

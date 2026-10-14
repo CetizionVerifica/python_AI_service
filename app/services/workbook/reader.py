@@ -129,6 +129,9 @@ class Sheet:
     data_rows: int
     skipped_reason: Optional[str] = None
     hidden: bool = False
+    # Units written in title lines above the header ("Electricity consumption
+    # (kWh) - FY 2025-26"): the unit of a sheet whose header and cells name none.
+    title_units: list[str] = field(default_factory=list)
 
     @property
     def row_refs(self) -> list[str]:
@@ -142,6 +145,8 @@ class Sheet:
         """The sheet without its rows (golden JSON, telemetry, prompts)."""
         d = asdict(self)
         d.pop("rows")
+        if not d.get("title_units"):
+            d.pop("title_units", None)  # only described when the title names a unit
         d["row_refs_head"] = self.row_refs[:3]
         return d
 
@@ -543,7 +548,15 @@ def _describe_sheet(grid: _Grid) -> Sheet:
     skipped = None
     if len(kept) < MIN_DATA_ROWS:
         skipped = "fewer than 2 data rows"
-    return Sheet(**base, header_row=header_row, header_depth=depth, columns=columns, rows=kept, dropped_rows=dropped, layout=layout, fingerprint=fp, data_rows=len(kept), skipped_reason=skipped)
+    title_units: list[str] = []
+    for r in range(0, header_row - 1):
+        for v in rows[r]:
+            text = cell_text(v)
+            if text and cell_kind(v) == "text":
+                for u in unit_tokens_in_header(text):
+                    if u not in title_units:
+                        title_units.append(u)
+    return Sheet(**base, header_row=header_row, header_depth=depth, columns=columns, rows=kept, dropped_rows=dropped, layout=layout, fingerprint=fp, data_rows=len(kept), skipped_reason=skipped, title_units=title_units)
 
 
 def _describe_column(name: str, letter: str, c: int, kept: list[dict], rows: list[list[Any]], header_row: int, depth: int) -> Column:

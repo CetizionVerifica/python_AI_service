@@ -239,6 +239,27 @@ def preview(payload: dict, request: Request, principal: Principal = Depends(requ
 
 
 # ---- Smart import (XI2): propose a mapping for one site ----
+def _propose_extras(payload: dict):
+    """Optional ``sheet_categories`` ({sheet name: category id}, the user's
+    choice on the confirm screen) and ``sheets`` (only these sheet names)."""
+    raw_cats = payload.get("sheet_categories")
+    sheet_categories = None
+    if raw_cats is not None:
+        if not isinstance(raw_cats, dict):
+            raise HTTPException(status_code=422, detail="sheet_categories must map sheet names to category ids")
+        try:
+            sheet_categories = {str(k): int(v) for k, v in raw_cats.items()}
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="sheet_categories must map sheet names to category ids")
+    raw_sheets = payload.get("sheets")
+    only_sheets = None
+    if raw_sheets is not None:
+        if not isinstance(raw_sheets, list) or not all(isinstance(x, str) for x in raw_sheets) or not raw_sheets:
+            raise HTTPException(status_code=422, detail="sheets must be a non-empty list of sheet names")
+        only_sheets = raw_sheets
+    return sheet_categories, only_sheets
+
+
 @router.post("/propose")
 def propose(payload: dict, request: Request, principal: Principal = Depends(require_user)):
     """``{ document_id, site_id }`` → a ``MappingProposal`` for that site (XI0 §2).
@@ -256,11 +277,15 @@ def propose(payload: dict, request: Request, principal: Principal = Depends(requ
         raise HTTPException(status_code=422, detail="site_id must be a whole number")
     if not principal.can_access_site(site_id):
         raise HTTPException(status_code=403, detail={"code": "IMPORT_FORBIDDEN", "message": "You cannot import into this site."})
+    sheet_categories, only_sheets = _propose_extras(payload)
     mapping_api.check_propose_rate(principal.user_id)
     try:
         with plans.PlanClient(_bearer(request)) as client:
             company_id = company_id_for_site(site_id) if principal.is_superadmin else None
-            proposal = mapping_api.propose_document(client, document_id=document_id, site_id=site_id, company_id=company_id)
+            proposal = mapping_api.propose_document(
+                client, document_id=document_id, site_id=site_id, company_id=company_id,
+                sheet_categories=sheet_categories, only_sheets=only_sheets,
+            )
         return proposal.model_dump()
     except HTTPException:
         raise
