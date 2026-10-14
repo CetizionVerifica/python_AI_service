@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Literal, Optional, Protocol
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.core.config import settings
 
@@ -31,13 +31,27 @@ class ModelError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-class ModelCategoryValue(BaseModel):
+class _Answer(BaseModel):
+    """JSON-mode models (OpenRouter/Gemini) write ``null`` for the parts they
+    leave out, e.g. ``"values": null`` on a fixed category. Read a null as
+    "not given" so the field's default applies; a required part that is null
+    still fails validation."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_is_not_given(cls, data):
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if v is not None}
+        return data
+
+
+class ModelCategoryValue(_Answer):
     text: str
     category_id: Optional[int] = None
     confidence: float = 0.0
 
 
-class ModelCategory(BaseModel):
+class ModelCategory(_Answer):
     kind: Literal["fixed", "column"]
     category_id: Optional[int] = None
     column: Optional[str] = None
@@ -45,12 +59,12 @@ class ModelCategory(BaseModel):
     confidence: float = 0.0
 
 
-class ModelMonthColumn(BaseModel):
+class ModelMonthColumn(_Answer):
     column: str
     date: str
 
 
-class ModelPeriod(BaseModel):
+class ModelPeriod(_Answer):
     kind: Literal["column", "monthly_fixed", "yearly", "months_as_columns"]
     column: Optional[str] = None
     date: Optional[str] = None
@@ -60,20 +74,20 @@ class ModelPeriod(BaseModel):
     confidence: float = 0.0
 
 
-class ModelField(BaseModel):
+class ModelField(_Answer):
     key: str
     column: Optional[str] = None
     confidence: float = 0.0
 
 
-class ModelActivity(BaseModel):
+class ModelActivity(_Answer):
     sheet_text: str
     category_id: Optional[int] = None
     factor_name: Optional[str] = None
     confidence: float = 0.0
 
 
-class ModelAnswer(BaseModel):
+class ModelAnswer(_Answer):
     """One sheet's answer. Every part is optional: the model fills what it was asked for."""
 
     site_column: Optional[str] = None
