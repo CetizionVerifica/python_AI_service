@@ -1,0 +1,106 @@
+"""XI2 ``rows_from_proposal``: a confirmed proposal plus the workbook give
+one ImportRow per kept sheet row (or per filled month cell), with the row
+ref, period, wording and unit as written, provenance in ``meta``, and local
+issues for rows this service already knows ESG-lite would refuse."""
+import pytest
+
+from app.schemas.mapping import MappingProposal
+from app.services.mapping.engine import propose
+from app.services.mapping.rows import rows_from_proposal
+from app.services.workbook import read_workbook
+from ci.tests.conftest import FIXTURES
+from ci.tests.mapping_fixtures import ctx, lookup
+
+XI1 = FIXTURES / "xi1"
+
+
+def planned(name, edit=None):
+    wb = read_workbook(XI1 / name)
+    p = propose(wb, 1, ctx(), [], lookup())
+    if edit:
+        p = MappingProposal.model_validate(edit(p.model_dump()))
+    return wb, p, rows_from_proposal(wb, p)
+
+
+def test_one_row_per_kept_sheet_row_with_ref_period_and_text_as_written():
+    _, _, sr = planned("01-single-sheet-monthly.xlsx")
+    assert len(sr.rows) == 8 and sr.local_issues == []
+    first = sr.rows[0]
+    assert first["row_ref"] == "Diesel!A2" and first["site_id"] == 2 and first["category_id"] == 3
+    assert first["period"] == {"kind": "monthly", "date": "2025-01-31"}
+    assert first["activity_name"] == "HSD" and first["activity_unit"] == "Litre" and first["activity_value"] == 1200
+    assert first["meta"] == {"source": "rules", "confidence": 0.85}
+    assert "total" not in first and "factor" not in first
+
+
+def test_rows_for_another_site_are_kept_back_as_site_not_allowed():
+    _, _, sr = planned("03-multi-site-one-sheet.xlsx")
+    assert len(sr.rows) == 8
+    assert [(i.code, i.row_ref) for i in sr.local_issues] == [("SITE_NOT_ALLOWED", "All plants!A3"), ("SITE_NOT_ALLOWED", "All plants!A6"), ("SITE_NOT_ALLOWED", "All plants!A9"), ("SITE_NOT_ALLOWED", "All plants!A12")]
+    assert all(r["site_id"] == 2 for r in sr.rows)
+    assert sr.local_issues[0].as_planned_row()["state"] == "issue"
+
+
+def test_months_as_columns_make_one_row_per_filled_cell():
+    _, p, sr = planned("07-months-as-columns.xlsx")
+    assert len(sr.rows) == 35  # 3 activities × 12 months, one blank cell
+    assert sr.rows[0]["row_ref"] == "Pivot!C2" and sr.rows[0]["period"] == {"kind": "monthly", "date": "2025-01-31"}
+    assert sr.rows[11]["row_ref"] == "Pivot!N2" and sr.rows[11]["period"]["date"] == "2025-12-31"
+    blank = sr.local_issues[0]
+    assert (blank.code, blank.row_ref, blank.severity) == ("PIVOT_EMPTY_CELL", "Pivot!G4", "info")
+    assert blank.as_planned_row()["state"] == "skipped"
+
+
+def test_yearly_period_is_carried_on_every_row():
+    _, _, sr = planned("06-yearly-fy.xlsx")
+    assert [r["period"] for r in sr.rows] == [{"kind": "yearly", "year_type": "FY", "year": 2024}] * 3
+    assert [r["activity_unit"] for r in sr.rows] == ["L", "kg", "kWh"]
+
+
+def test_units_inside_value_cells_and_headers_are_used():
+    _, _, sr = planned("08-mixed-units.xlsx")
+    assert [(r["activity_value"], r["activity_unit"]) for r in sr.rows] == [(1200.0, "litre"), (1.5, "KL"), (400.0, "kg"), (0.4, "MT"), (12.0, "tonnes")]
+    assert sr.rows[0]["period"]["date"] == "2025-04-01"  # day-first
+    _, _, sr = planned("04-one-sheet-per-category.xlsx")
+    electricity = [r for r in sr.rows if r["category_id"] == 5]
+    assert electricity and all(r["activity_unit"] == "kwh" for r in electricity)  # from the "kWh" header
+    travel = [r for r in sr.rows if r["category_id"] == 6]
+    assert travel and travel[0]["fields"] == {"distance": "1700", "passengers": "1"} and travel[0]["activity_unit"] == "km"
+    assert "activity_value" not in travel[0]
+
+
+def test_category_column_rows_without_a_category_are_kept_back():
+    def edit(d):
+        d["sheets"][0]["category"]["values"][0]["id"] = None
+        return d
+
+    _, _, sr = planned("05-yearly-cy.xlsx", edit)
+    assert [i.code for i in sr.local_issues] == ["CATEGORY_NOT_ASSIGNED"] and len(sr.rows) == 2
+
+
+def test_excluded_sheets_and_skipped_fields_are_left_out():
+    def edit(d):
+        d["sheets"][1]["excluded"] = True
+        for f in d["sheets"][0]["fields"]:
+            if f["key"] == "supplier":
+                f["column"] = None
+                f["skipped"] = True
+        return d
+
+    _, _, sr = planned("04-one-sheet-per-category.xlsx", edit)
+    assert {r["category_id"] for r in sr.rows} == {3, 6}
+    assert all("fields" not in r for r in sr.rows if r["category_id"] == 3)
+
+
+def test_a_changed_file_is_refused_by_fingerprint():
+    wb, p, _ = planned("01-single-sheet-monthly.xlsx")
+    other = read_workbook(XI1 / "10-subtotal-rows.xlsx")
+    other.sheets[0].name = "Diesel"
+    with pytest.raises(ValueError):
+        rows_from_proposal(other, p)
+
+
+def test_large_ledger_maps_every_row_within_the_plan_limit():
+    _, _, sr = planned("12-large-ledger.csv")
+    assert len(sr.rows) == 15000 and sr.total_rows == 15000
+    assert sr.rows[-1]["row_ref"] == "12-large-ledger!A15001"

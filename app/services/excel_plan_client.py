@@ -115,10 +115,13 @@ class PlanClient:
 
     # -- plans ---------------------------------------------------------------
 
-    def create_plan(self, source_name: str, rows: list[dict], company_id: Optional[int] = None) -> dict:
+    def create_plan(self, source_name: str, rows: list[dict], company_id: Optional[int] = None, mapping: Optional[dict] = None) -> dict:
         body: dict[str, Any] = {"source_name": source_name, "channel": CHANNEL, "rows": rows}
         if company_id is not None:
             body["company_id"] = company_id
+        if mapping is not None:
+            # XI0: the confirmed MappingProposal, kept on import_plan.mapping so XI3 learns from it on commit.
+            body["mapping"] = mapping
         return self._call("POST", "/imports/plans", json=body)
 
     def append_rows(self, plan_id: str, version: int, rows: list[dict]) -> dict:
@@ -138,6 +141,34 @@ class PlanClient:
             f"/imports/plans/{plan_id}/commit",
             json={"version": version, "skip_rows_with_issues": skip_rows_with_issues, "idempotency_key": idempotency_key},
         )
+
+    # -- context (IM3) and mapping profiles (XI3), read with the caller's token only --
+
+    def get_context(self, company_id: Optional[int] = None) -> dict:
+        """``GET /imports/context``: the only universe the mapping engine may name."""
+        return self._call("GET", "/imports/context", params={"company_id": company_id} if company_id is not None else None)
+
+    def search_activities(self, site_id: int, category_id: int, q: str = "", limit: int = 50, company_id: Optional[int] = None) -> list[dict]:
+        params: dict[str, Any] = {"site_id": int(site_id), "category_id": int(category_id), "limit": int(limit)}
+        if q:
+            params["q"] = q
+        if company_id is not None:
+            params["company_id"] = company_id
+        res = self._call("GET", "/imports/context/activities", params=params)
+        return list(res) if isinstance(res, list) else list(res.get("activities") or res.get("items") or [])
+
+    def get_mapping_profiles(self, fingerprint: str, site_id: int, company_id: Optional[int] = None) -> list[dict]:
+        """``GET /imports/mapping-profiles?fingerprint=`` (XI3). Until XI3 is deployed the route is a 404: no profiles."""
+        params: dict[str, Any] = {"fingerprint": fingerprint, "site_id": int(site_id)}
+        if company_id is not None:
+            params["company_id"] = company_id
+        try:
+            res = self._call("GET", "/imports/mapping-profiles", params=params)
+        except EsgLiteError as e:
+            if e.status == 404:
+                return []
+            raise
+        return list(res) if isinstance(res, list) else list(res.get("profiles") or res.get("items") or [])
 
     def cancel_plan(self, plan_id: str) -> dict:
         return self._call("POST", f"/imports/plans/{plan_id}/cancel")
@@ -171,13 +202,15 @@ class LocalIssue:
     code: str
     reason: str
     input: dict = field(default_factory=dict)
+    # "error" rows are not sent; an "info" row (PIVOT_EMPTY_CELL) is a cell with nothing to import.
+    severity: str = "error"
 
     def as_planned_row(self) -> dict:
         """The same shape as a PlannedRow in state ``issue``, so the preview lists it with the rest."""
         return {
             "row_ref": self.row_ref,
-            "state": "issue",
-            "issues": [{"code": self.code, "severity": "error", "message": self.reason}],
+            "state": "issue" if self.severity == "error" else "skipped",
+            "issues": [{"code": self.code, "severity": self.severity, "message": self.reason}],
             "input": self.input,
             "local": True,
         }
@@ -314,12 +347,12 @@ def _chunks(rows: list[dict], size: int = ROWS_PER_REQUEST) -> Iterable[list[dic
         yield rows[i : i + size]
 
 
-def create_plan_from_rows(client: PlanClient, source_name: str, rows: list[dict], company_id: Optional[int]) -> dict:
+def create_plan_from_rows(client: PlanClient, source_name: str, rows: list[dict], company_id: Optional[int], mapping: Optional[dict] = None) -> dict:
     """``POST /imports/plans`` with the first 2,000 rows, then ``/rows`` for the rest, following the version."""
     if not rows:
         raise ValueError("No rows to import. Check the category and unit columns and the ticked categories.")
     chunks = list(_chunks(rows))
-    plan = client.create_plan(source_name, chunks[0], company_id)
+    plan = client.create_plan(source_name, chunks[0], company_id, mapping=mapping)
     for chunk in chunks[1:]:
         plan = client.append_rows(plan["plan_id"], int(plan["version"]), chunk)
     return plan
@@ -370,8 +403,10 @@ def _with_local_counts(summary: dict, local: list[LocalIssue]) -> dict:
     if not local:
         return summary
     counts = dict(summary.get("counts") or {})
+    errors = [i for i in local if i.severity == "error"]
     counts["rows"] = int(counts.get("rows") or 0) + len(local)
-    counts["issue"] = int(counts.get("issue") or 0) + len(local)
+    counts["issue"] = int(counts.get("issue") or 0) + len(errors)
+    counts["skipped"] = int(counts.get("skipped") or 0) + (len(local) - len(errors))
     summary = {**summary, "counts": counts}
     by_code: dict[str, list[str]] = {}
     for item in local:
@@ -391,6 +426,7 @@ def plan_sheet(
     page_size: int = 100,
     state: Optional[str] = None,
     cancel_plan_id: Optional[str] = None,
+    mapping: Optional[dict] = None,
 ) -> dict:
     """Plan the sheet's rows and answer with the plan and a page of its rows.
 
@@ -411,7 +447,7 @@ def plan_sheet(
             return {"plan": summary, "rows": rows, "total_rows": len(rows), "page": 1, "page_size": page_size, "not_selected": sheet.not_selected, "sheet_rows": sheet.total_rows}
         raise ValueError("No rows to import. Check the category and unit columns and the ticked categories.")
 
-    plan = create_plan_from_rows(client, source_name, sheet.rows, company_id)
+    plan = create_plan_from_rows(client, source_name, sheet.rows, company_id, mapping=mapping)
     return plan_page(client, plan["plan_id"], page=page, page_size=page_size, state=state, local_issues=sheet.local_issues, not_selected=sheet.not_selected, sheet_rows=sheet.total_rows)
 
 
