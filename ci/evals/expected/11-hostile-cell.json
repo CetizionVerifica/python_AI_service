@@ -38,6 +38,7 @@
     "out_of_scope_rows": 0,
     "out_of_scope_refs": [],
     "out_of_scope_refs_rule": null,
+    "held_refs": [],
     "issues": {
       "UNKNOWN_ACTIVITY": 1
     },

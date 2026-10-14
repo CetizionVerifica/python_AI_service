@@ -46,6 +46,7 @@
       "Fuel!A10"
     ],
     "out_of_scope_refs_rule": null,
+    "held_refs": [],
     "issues": {
       "SITE_NOT_ALLOWED": 6
     },

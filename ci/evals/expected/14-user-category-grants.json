@@ -75,17 +75,16 @@
   ],
   "plan": {
     "rows": 12,
-    "out_of_scope_rows": 4,
-    "out_of_scope_refs": [
+    "out_of_scope_rows": 0,
+    "out_of_scope_refs": [],
+    "out_of_scope_refs_rule": null,
+    "held_refs": [
       "Travel!A2",
       "Travel!A3",
       "Travel!A4",
       "Travel!A5"
     ],
-    "out_of_scope_refs_rule": null,
-    "issues": {
-      "CATEGORY_NOT_ASSIGNED": 4
-    },
+    "issues": {},
     "tco2e": null
   },
   "writable_category_ids": [],
@@ -94,5 +93,5 @@
   "depends_on": null,
   "cross_tenant_probe": false,
   "checks": [],
-  "note": "Travel is not in this User's grants, so it is not in their context: the sheet resolves to no category (NOT_IN_CONTEXT) and its 4 rows are flagged, never written. The scorer accepts CATEGORY_NOT_ASSIGNED or NOT_IN_CONTEXT on them."
+  "note": "Travel is not in this User's grants, so it is not in their context and no proposal can name it: the Travel sheet must not get category 3, nor any category with confidence ≥ 0.8 (the rules leave it at 0.0 for the user to pick, among their own categories only), and its 4 rows must stay in the issue state, never written. A proposal edited to category 3 is refused by ESG-lite (403 IMPORT_FORBIDDEN, audit XI-01)."
 }

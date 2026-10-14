@@ -144,6 +144,7 @@ def case(
     out_of_scope_rows: int = 0,
     out_of_scope_refs: list[str] | None = None,
     out_of_scope_refs_rule: str | None = None,
+    held_refs: list[str] | None = None,
     writable_category_ids: list[int] | None = None,
     issues: dict | None = None,
     max_model_calls: int | None = None,
@@ -172,6 +173,8 @@ def case(
             # Which rows must be flagged (and never written), not just how many.
             "out_of_scope_refs": out_of_scope_refs or [],
             "out_of_scope_refs_rule": out_of_scope_refs_rule,
+            # Rows that must stay in the issue state (never ready, never written) whatever the code.
+            "held_refs": held_refs or [],
             "issues": issues or {},
             "tco2e": expect_tco2e,
         },
@@ -348,13 +351,13 @@ def main() -> None:
         travel.append([month_name(ym), "Domestic flight – economy", 900 + i])
     write_workbook("14-user-category-grants", [("Fuel", fuel), ("Electricity", eb), ("Travel", travel)])
     write_expected("14-user-category-grants", case(
-        "14-user-category-grants", caller="multi_user", site_id=1, plan_rows=12, out_of_scope_rows=4, out_of_scope_refs=[f"Travel!A{r}" for r in range(2, 6)], issues={"CATEGORY_NOT_ASSIGNED": 4},
+        "14-user-category-grants", caller="multi_user", site_id=1, plan_rows=12, held_refs=[f"Travel!A{r}" for r in range(2, 6)],
         sheets=[
             sheet_expect("Fuel", category_id=CAT["fuel"], period=col_period("Month"), value="Litres", unit=None, name="Fuel", activities={"HSD": "HSD"}, data_rows=4),
             sheet_expect("Electricity", category_id=CAT["electricity"], period=col_period("Month"), value="kWh", unit=None, name="Source", activities={"Grid – TNEB": "Grid – TNEB"}, data_rows=4),
             sheet_expect("Travel", category_id=None, period=col_period("Month"), value="km", unit=None, name="Mode", activities={}, data_rows=4),
         ],
-        note="Travel is not in this User's grants, so it is not in their context: the sheet resolves to no category (NOT_IN_CONTEXT) and its 4 rows are flagged, never written. The scorer accepts CATEGORY_NOT_ASSIGNED or NOT_IN_CONTEXT on them.",
+        note="Travel is not in this User's grants, so it is not in their context and no proposal can name it: the Travel sheet must not get category 3, nor any category with confidence ≥ 0.8 (the rules leave it at 0.0 for the user to pick, among their own categories only), and its 4 rows must stay in the issue state, never written. A proposal edited to category 3 is refused by ESG-lite (403 IMPORT_FORBIDDEN, audit XI-01).",
     ))
 
     # ---- 15 second upload of the same layout as 01 (new): profile hit, zero model calls ----
@@ -407,14 +410,15 @@ def main() -> None:
         ["2025-03", "HSD", 1200, 9.99, 999, 102000],
     ]
     write_workbook("18-totals-and-factors-columns", [("Fuel", rows)])
-    # The fixture's HSD 2025 factor at site 1 has factor_value 2690 per litre, and the
-    # engine's total is value × factor_value / 1000 (ESG-lite src/services/emissionWrite/
-    # compute.ts), so 3,300 L → 3,300 × 2690 / 1000 = 8,877 tCO2e. The fixture factor is
-    # deliberately not the real-world 2.69 kg/L; the eval checks the engine's own number.
+    # The engine's total is value × factor_value / 1000 (ESG-lite emissionWrite/compute.ts)
+    # with the factor of the year BEFORE the reporting year (resolve.ts targetYearFor), falling
+    # back to the newest year it has. The fixture has HSD for 2025 (2690) and 2026 (2695) only,
+    # so 2025 rows use 2026: 3,300 L × 2695 / 1000 = 8,893.5 tCO2e (with FACTOR_FALLBACK_YEAR
+    # warnings). The fixture factor is deliberately not the real-world 2.69 kg/L.
     write_expected("18-totals-and-factors-columns", case(
-        "18-totals-and-factors-columns", caller="manager", site_id=1, plan_rows=3, expect_tco2e=8877.0,
+        "18-totals-and-factors-columns", caller="manager", site_id=1, plan_rows=3, expect_tco2e=8893.5,
         sheets=[sheet_expect("Fuel", category_id=CAT["fuel"], period=col_period("Month"), value="Litres", unit=None, name="Fuel", activities={"HSD": "HSD"}, data_rows=3, never_map_columns=["Emission factor (kgCO2e/L)", "tCO2e", "Total cost"])],
-        note="The sheet's own factor and tCO2e columns are wrong on purpose. ESG-lite's total must come from its own factor (3,300 L × fixture factor_value 2690 / 1000 = 8,877 tCO2e), proving the sheet's numbers were ignored.",
+        note="The sheet's own factor and tCO2e columns are wrong on purpose. ESG-lite's total must come from its own factor (3,300 L × the fixture's newest HSD factor_value 2695 / 1000 = 8,893.5 tCO2e; ESG-lite looks for the year before the reporting year and falls back to the newest), proving the sheet's numbers were ignored.",
     ))
 
     print(f"Wrote {len(list(OUT.glob('*.xlsx')))} workbooks to {OUT} and {len(list(EXPECTED.glob('*.json')))} expected files")

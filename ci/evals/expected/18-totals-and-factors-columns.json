@@ -40,8 +40,9 @@
     "out_of_scope_rows": 0,
     "out_of_scope_refs": [],
     "out_of_scope_refs_rule": null,
+    "held_refs": [],
     "issues": {},
-    "tco2e": 8877.0
+    "tco2e": 8893.5
   },
   "writable_category_ids": [],
   "commit": true,
@@ -49,5 +50,5 @@
   "depends_on": null,
   "cross_tenant_probe": false,
   "checks": [],
-  "note": "The sheet's own factor and tCO2e columns are wrong on purpose. ESG-lite's total must come from its own factor (3,300 L × fixture factor_value 2690 / 1000 = 8,877 tCO2e), proving the sheet's numbers were ignored."
+  "note": "The sheet's own factor and tCO2e columns are wrong on purpose. ESG-lite's total must come from its own factor (3,300 L × the fixture's newest HSD factor_value 2695 / 1000 = 8,893.5 tCO2e; ESG-lite looks for the year before the reporting year and falls back to the newest), proving the sheet's numbers were ignored."
 }

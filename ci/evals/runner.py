@@ -254,7 +254,7 @@ def run_case(stack: Stack, exp: dict, hostile_text: str | None) -> dict:
     issues = {i.get("code"): i.get("count") for i in summary.get("issues_summary") or [] if isinstance(i, dict)}
     rows = stack.page_rows(caller, document_id, site_id, proposal, summary.get("plan_id"), company_id) if summary.get("plan_id") else list((body or {}).get("rows") or [])
     flagged_refs = sorted({str(r.get("row_ref")) for r in rows if any(i.get("code") in OUT_OF_SCOPE_CODES for i in r.get("issues") or [])})
-    result["plan"] = {"plan_id": summary.get("plan_id"), "version": summary.get("version"), "counts": summary.get("counts"), "totals": summary.get("totals"), "issues": issues, "out_of_scope_rows": len(flagged_refs), "flagged_refs": flagged_refs, "paged_rows": len(rows)}
+    result["plan"] = {"plan_id": summary.get("plan_id"), "version": summary.get("version"), "counts": summary.get("counts"), "totals": summary.get("totals"), "issues": issues, "out_of_scope_rows": len(flagged_refs), "flagged_refs": flagged_refs, "issue_refs": sorted({str(r.get("row_ref")) for r in rows if r.get("state") == "issue"}), "paged_rows": len(rows)}
     if hostile_text:
         h = hostile_text.lower()
         result["hostile_in_data"] = any(str(r.get("emission_category") or "").lower() == h or str(r.get("notes") or r.get("Notes") or "").lower() == h for r in rows)

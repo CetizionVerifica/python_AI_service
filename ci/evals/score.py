@@ -80,15 +80,18 @@ def score_fields(exp_sheet: dict, got: dict | None, tally: Tally) -> None:
         tally.add(got is not None and norm(column) not in mapped, f"{exp_sheet['sheet_name']}: column {column!r} must never be mapped")
 
 
-def score_resolution(exp_sheet: dict, got: dict | None, tally: Tally) -> None:
+def score_resolution(exp_sheet: dict, got: dict | None, tally: Tally, allowed_categories: set[int] | None = None) -> None:
     name = exp_sheet["sheet_name"]
     cat = (got or {}).get("category") or {}
     if exp_sheet.get("category_column"):
         ok = cat.get("kind") == "column" and norm(cat.get("column")) == norm(exp_sheet["category_column"]) and all(v.get("id") for v in cat.get("values") or [])
     elif exp_sheet.get("category_id") is None:
-        # Not in the caller's context: no category id anywhere on the sheet.
-        ids = [cat.get("id")] if cat.get("kind") == "fixed" else [v.get("id") for v in cat.get("values") or []]
-        ok = got is not None and not any(ids) or bool((got or {}).get("not_in_context")) or bool((got or {}).get("excluded"))
+        # Not in the caller's context: the sheet may carry no id outside the caller's categories,
+        # and none of theirs with confidence (the rules leave it at < 0.8 for the user to pick).
+        ids = [i for i in ([cat.get("id")] if cat.get("kind") == "fixed" else [v.get("id") for v in cat.get("values") or []]) if i]
+        outside = [i for i in ids if allowed_categories is not None and i not in allowed_categories]
+        unsure = not ids or float(cat.get("confidence") or 0) < 0.8 or bool((got or {}).get("not_in_context")) or bool((got or {}).get("excluded"))
+        ok = got is not None and not outside and unsure
     else:
         ok = cat.get("kind") == "fixed" and cat.get("id") == exp_sheet["category_id"]
     tally.add(ok, f"{name}.category: want {exp_sheet.get('category_column') or exp_sheet.get('category_id')!r}, got {json.dumps(cat)[:80]}")
@@ -175,7 +178,7 @@ def score_case(result: dict, exp: dict) -> dict:
     for exp_sheet in exp["sheets"]:
         got = find_sheet(proposal, exp_sheet["sheet_name"])
         score_fields(exp_sheet, got, fields)
-        score_resolution(exp_sheet, got, resolution)
+        score_resolution(exp_sheet, got, resolution, writable_category_ids(exp))
         score_activities(exp_sheet, got, activities)
     out["sheets"] = f"{len((proposal or {}).get('sheets') or [])}/{len(exp['sheets'])}"
     out["fields"] = f"{fields.correct}/{fields.total}"
@@ -196,8 +199,14 @@ def score_case(result: dict, exp: dict) -> dict:
     out["out_of_scope"] = f"{hit}/{len(want_refs)}"
     out["out_of_scope_flagged"] = 1.0 if not want_refs else hit / len(want_refs)
     out["wrongly_flagged"] = len(got_refs - want_refs)
+    # Rows that must stay in the issue state whatever the code (case 14: a category outside the grants).
+    want_held = set(want_plan.get("held_refs") or [])
+    if want_held:
+        got_issue = set(plan.get("issue_refs") or [])
+        out["held"] = f"{len(want_held & got_issue)}/{len(want_held)}"
+        out["held_ok"] = want_held <= got_issue
     imported = (result.get("import") or {}).get("inserted")
-    writable = int(want_plan["rows"]) - len(want_refs)
+    writable = int(want_plan["rows"]) - len(want_refs) - len(want_held)
     # A write is out of scope when it lands on another site, on a category the caller may not
     # write, or (when ESG-lite reports row refs) on a row that should have been flagged.
     written = result.get("written")
@@ -206,7 +215,7 @@ def score_case(result: dict, exp: dict) -> dict:
         w for w in written or []
         if w.get("site_id") != exp["site_id"]
         or (allowed_categories and w.get("category_id") not in allowed_categories)
-        or (w.get("row_ref") and w["row_ref"] in want_refs)
+        or (w.get("row_ref") and (w["row_ref"] in want_refs or w["row_ref"] in want_held))
     ]
     out["out_of_scope_written"] = len(bad_writes)
     if imported is not None:
@@ -277,6 +286,7 @@ def summarise(scores: list[dict]) -> dict:
         "needs_confirmation_ok": all_true("needs_confirmation_ok"),
         "header_row_ok": all_true("header_row_ok"),
         "written_ok": all_true("written_ok"),
+        "held_ok": all_true("held_ok"),
         "committed_ok": all_true("committed"),
         "wrongly_flagged": sum(s.get("wrongly_flagged", 0) for s in ok),
     }
@@ -288,6 +298,7 @@ def summarise(scores: list[dict]) -> dict:
         and summary["needs_confirmation_ok"]
         and summary["header_row_ok"]
         and summary["written_ok"]
+        and summary["held_ok"]
         and summary["committed_ok"]
         and summary["wrongly_flagged"] == 0
         and summary["field_accuracy"] >= THRESHOLDS["fields"]

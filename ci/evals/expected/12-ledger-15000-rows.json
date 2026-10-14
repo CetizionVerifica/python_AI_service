@@ -38,6 +38,7 @@
     "out_of_scope_rows": 7500,
     "out_of_scope_refs": [],
     "out_of_scope_refs_rule": "ledger-odd-rows",
+    "held_refs": [],
     "issues": {
       "SITE_NOT_ALLOWED": 7500,
       "DUPLICATE_IN_PLAN": "warning"

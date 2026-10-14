@@ -70,7 +70,7 @@ def test_expected_files_stay_inside_the_fixture(expected_cases):
     assert by_name["15-second-upload-same-layout"]["max_model_calls"] == 0
     assert by_name["15-second-upload-same-layout"]["depends_on"] == "01-single-site-monthly-fuel"
     assert by_name["11-hostile-cell"]["hostile_text"]
-    assert by_name["18-totals-and-factors-columns"]["plan"]["tco2e"] == 8877.0
+    assert by_name["18-totals-and-factors-columns"]["plan"]["tco2e"] == 8893.5
     assert len(by_name["17-twenty-sheets"]["sheets"]) == 20
 
 
@@ -107,15 +107,16 @@ def perfect_result(exp: dict) -> dict:
     plan = exp["plan"]
     issues = {code: (1 if n == "warning" else n) for code, n in plan["issues"].items()}
     refs = sorted(score.expected_out_of_scope_refs(plan))
-    writable = plan["rows"] - len(refs)
+    held = sorted(plan.get("held_refs") or [])
+    writable = plan["rows"] - len(refs) - len(held)
     category = next((s["category_id"] for s in exp["sheets"] if s.get("category_id")), None) or (exp.get("writable_category_ids") or [1])[0]
     return {
         "case": exp["case"],
         "status": {"upload": 200, "propose": 200, "preview": 200, **({"import": 200} if exp["commit"] else {})},
         "error_code": None,
         "proposal": perfect_proposal(exp),
-        "plan": {"plan_id": "p", "version": 1, "counts": {"rows": plan["rows"], "ready": writable, "issue": len(refs)}, "totals": {"tco2e": plan["tco2e"] or 0}, "issues": issues, "out_of_scope_rows": len(refs), "flagged_refs": refs},
-        "import": {"inserted": writable, "skipped": len(refs)} if exp["commit"] else None,
+        "plan": {"plan_id": "p", "version": 1, "counts": {"rows": plan["rows"], "ready": writable, "issue": len(refs) + len(held)}, "totals": {"tco2e": plan["tco2e"] or 0}, "issues": issues, "out_of_scope_rows": len(refs), "flagged_refs": refs, "issue_refs": sorted(refs + held)},
+        "import": {"inserted": writable, "skipped": len(refs) + len(held)} if exp["commit"] else None,
         "written": [{"site_id": exp["site_id"], "category_id": category, "row_ref": None}] * writable if exp["commit"] else None,
         "model_calls": exp["max_model_calls"],
         "profile_hits": exp["min_profile_hits"],
@@ -201,6 +202,12 @@ def test_perfect_proposals_validate_against_the_xi0_contract(expected_cases):
 
 # ---- review findings 2026-10-14 (XI6 section): each one has a test ----
 
+def _sub(tmp_path: pathlib.Path, name: str) -> pathlib.Path:
+    d = tmp_path / name
+    d.mkdir()
+    return d
+
+
 def _perfect(expected_cases):
     return [perfect_result(c) for c in expected_cases]
 
@@ -267,10 +274,43 @@ def test_a_write_to_another_category_counts_even_when_the_total_is_right(tmp_pat
 
 def test_case_18_total_matches_the_engine_formula():
     """Finding 4: not a unit error. ESG-lite's total is value × factor_value / 1000
-    (emissionWrite/compute.ts) and the fixture's HSD 2025 factor_value at site 1 is 2690."""
+    (emissionWrite/compute.ts) with the factor of the year before the reporting year, falling
+    back to the newest (resolve.ts). 2025 rows want 2024; the fixture has HSD 2025 (2690) and
+    2026 (2695) only, so the 2026 factor is used (first live probe run, 2026-10-14)."""
     exp = json.loads((EVALS / "expected" / "18-totals-and-factors-columns.json").read_text())
     litres = 1000 + 1100 + 1200
-    assert exp["plan"]["tco2e"] == round(litres * 2690 / 1000, 2) == 8877.0
+    assert exp["plan"]["tco2e"] == round(litres * 2695 / 1000, 2) == 8893.5
+
+
+def test_rows_outside_the_users_grants_stay_held_and_unwritten(tmp_path, expected_cases):
+    """Case 14: the Travel rows must stay in the issue state and never be written; the sheet
+    may not name category 3 or claim one of the User's categories with confidence."""
+    results = _perfect(expected_cases)
+    r14 = next(r for r in results if r["case"] == "14-user-category-grants")
+    r14["plan"]["issue_refs"] = []
+    _, summary = _score(_sub(tmp_path, "a"), results)
+    assert summary["held_ok"] is False and not summary["pass"]
+
+    results = _perfect(expected_cases)
+    r14 = next(r for r in results if r["case"] == "14-user-category-grants")
+    r14["written"] = r14["written"][:-1] + [{"site_id": 1, "category_id": 1, "row_ref": "Travel!A2"}]
+    _, summary = _score(_sub(tmp_path, "b"), results)
+    assert summary["cross_tenant_writes"] == 1 and not summary["pass"]
+
+    for category in ({"kind": "fixed", "id": 3, "label": "Business Travel", "confidence": 0.9, "source": "llm"},
+                     {"kind": "fixed", "id": 2, "label": "Purchased Electricity", "confidence": 0.9, "source": "rules"}):
+        results = _perfect(expected_cases)
+        r14 = next(r for r in results if r["case"] == "14-user-category-grants")
+        r14["proposal"]["sheets"][2].update(category=category, not_in_context=[])
+        scores, _ = _score(_sub(tmp_path, f"c{category['id']}"), results)
+        assert next(s for s in scores if s["case"] == "14-user-category-grants")["resolution"] != "9/9"
+
+    # What the rules engine does today: the User's first category at 0.0, for them to pick.
+    results = _perfect(expected_cases)
+    r14 = next(r for r in results if r["case"] == "14-user-category-grants")
+    r14["proposal"]["sheets"][2].update(category={"kind": "fixed", "id": 2, "label": "Purchased Electricity", "confidence": 0, "source": "rules"}, not_in_context=[])
+    _, summary = _score(_sub(tmp_path, "d"), results)
+    assert summary["pass"]
 
 
 def test_runner_refuses_anything_but_a_local_stack():
