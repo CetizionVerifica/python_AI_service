@@ -1,0 +1,62 @@
+{
+  "case": "13-site-outside-scope",
+  "workbook": "13-site-outside-scope.xlsx",
+  "caller": "manager",
+  "site_id": 1,
+  "expect_status": 200,
+  "expect_error": null,
+  "max_model_calls": 1,
+  "min_profile_hits": 0,
+  "sheets": [
+    {
+      "sheet_name": "Fuel",
+      "layout": "rows",
+      "data_rows": 9,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": "Site",
+      "out_of_scope_values": [
+        "Plant B",
+        "Plant C"
+      ],
+      "never_map_columns": []
+    }
+  ],
+  "plan": {
+    "rows": 9,
+    "out_of_scope_rows": 6,
+    "out_of_scope_refs": [
+      "Fuel!A5",
+      "Fuel!A6",
+      "Fuel!A7",
+      "Fuel!A8",
+      "Fuel!A9",
+      "Fuel!A10"
+    ],
+    "out_of_scope_refs_rule": null,
+    "held_refs": [],
+    "issues": {
+      "SITE_NOT_ALLOWED": 6
+    },
+    "tco2e": null
+  },
+  "writable_category_ids": [],
+  "commit": true,
+  "hostile_text": null,
+  "depends_on": null,
+  "cross_tenant_probe": true,
+  "checks": [],
+  "note": "Plant C is no site of this company; Plant B is held but not chosen. Both get SITE_NOT_ALLOWED; 3 rows import. The cross-tenant twin previews the same document as company 2's Manager and expects 403/404."
+}

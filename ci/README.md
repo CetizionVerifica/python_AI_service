@@ -15,6 +15,7 @@ container (`ci/tests/conftest.py`).
 | `ci/tests/test_calculation_snapshot.py` | unit/number/date parsing, invoice total checks or category mapping change (the import's own calculation is ESG-lite's since IM11; its golden snapshot locks it) |
 | `ci/tests/test_excel_plan_client.py` | the bulk upload stops sending ESG-lite's plans API what the P27 page mapped (rows, chunks, token, channel), or this service inserts emission rows again |
 | `ci/tests/test_startup_tables.py` | the startup `CREATE TABLE IF NOT EXISTS` steps fail on a second boot or lose rows |
+| `ci/tests/test_evals_set.py` | the XI6 eval set (`ci/evals/`) drifts: generator not deterministic or out of sync with `expected/`, a case outside the audit fixture, or the scorer passing a flawed run |
 
 ## When a check blocks you on purpose
 
