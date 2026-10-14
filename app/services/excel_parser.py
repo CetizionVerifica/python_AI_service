@@ -1023,13 +1023,16 @@ def delete_document_file(document_id: int, new_status: str = "deleted") -> None:
         update_uploaded_document(document_id, status=new_status)
     except Exception as e:
         logger.warning(f"Failed to delete stored file for document_id={document_id}: {type(e).__name__}")
-        # The rows are saved whatever happened to the file: the document still
-        # moves on from "importing", else a retry is refused as "already being
-        # imported" for a batch that landed. cleanup_old_documents removes the file later.
-        try:
-            update_uploaded_document(document_id, status=new_status)
-        except Exception as e2:
-            logger.error(f"Could not update status for document_id={document_id}: {type(e2).__name__}")
+        # After an import the rows are saved whatever happened to the file, so
+        # the document still moves on from "importing" (else a retry is refused
+        # as "already being imported" for a batch that landed) and the file is
+        # left for cleanup_old_documents. A cleanup that fails keeps its status,
+        # so it is retried on the next run.
+        if new_status == "imported":
+            try:
+                update_uploaded_document(document_id, status=new_status)
+            except Exception as e2:
+                logger.error(f"Could not update status for document_id={document_id}: {type(e2).__name__}")
     finally:
         _cache_delete(document_id)
 

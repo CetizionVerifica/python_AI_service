@@ -212,10 +212,12 @@ def test_cells_over_esg_lites_text_limit_are_one_rows_issue_not_a_refused_reques
             {"emission_category": "Diesel", "activity_value": "", "activity_data_unit": "litre", "extra_notes": long},
             {"emission_category": "Diesel", "activity_value": "", "activity_data_unit": "litre", "extra_" + "h" * (plans.FIELD_NAME_MAX_CHARS + 1): "ok"},
             {"emission_category": "Diesel", "activity_value": "10", "activity_data_unit": "litre", "extra_notes": "x" * plans.TEXT_MAX_CHARS},
+            # 151 emoji are 151 code points but 302 UTF-16 units, which is what ESG-lite's schema counts.
+            {"emission_category": "Diesel", "activity_value": "10", "activity_data_unit": "litre", "extra_notes": "\U0001F525" * 151},
         ]
     )
     sheet = plans.rows_from_frame(df, [], SITE, CATEGORY, MONTH_END)
-    assert [(i.row, i.code) for i in sheet.local_issues] == [(1, "TEXT_TOO_LONG"), (2, "TEXT_TOO_LONG"), (3, "TEXT_TOO_LONG"), (4, "TEXT_TOO_LONG")]
+    assert [(i.row, i.code) for i in sheet.local_issues] == [(1, "TEXT_TOO_LONG"), (2, "TEXT_TOO_LONG"), (3, "TEXT_TOO_LONG"), (4, "TEXT_TOO_LONG"), (6, "TEXT_TOO_LONG")]
     assert all(len(i.emission_category or "") <= plans.TEXT_MAX_CHARS for i in sheet.local_issues)
     assert [r["row_ref"] for r in sheet.rows] == ["Row 5"]
 
@@ -480,6 +482,11 @@ def test_a_failed_file_delete_still_marks_the_document_imported(world, throwaway
     with throwaway_db.cursor() as cur:
         cur.execute("UPDATE uploaded_documents SET cloudinary_public_id = 'asset-1', status = 'importing' WHERE id = %s", (DOC,))
     ep.delete_document_file(DOC, new_status="imported")
+    with throwaway_db.cursor() as cur:
+        cur.execute("SELECT status FROM uploaded_documents WHERE id = %s", (DOC,))
+        assert cur.fetchone()[0] == "imported"
+    # A cleanup that fails keeps its status, so list_documents_for_cleanup retries it next run.
+    ep.delete_document_file(DOC)
     with throwaway_db.cursor() as cur:
         cur.execute("SELECT status FROM uploaded_documents WHERE id = %s", (DOC,))
         assert cur.fetchone()[0] == "imported"
