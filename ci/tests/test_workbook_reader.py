@@ -250,3 +250,103 @@ def test_unknown_extension_is_refused():
 )
 def test_month_of_header(header, expected):
     assert month_of_header(header) == expected
+
+
+# ---------------------------------------------------------------------------
+# Review findings (2026-10-14)
+# ---------------------------------------------------------------------------
+
+
+def test_a_sheet_formatted_out_to_the_last_column_reads_quickly():
+    import time as _time
+
+    def build(wb):
+        ws = wb.active
+        ws.append(["Month", "Fuel", "Qty"])
+        ws.append(["2025-01", "Diesel", 10])
+        ws.append(["2025-02", "Diesel", 12])
+        ws["XFD20000"].number_format = "0.00"  # formatted, no value
+
+    content = xlsx_bytes(build)
+    t0 = _time.monotonic()
+    sheet = read_workbook_bytes(content, "xlsx").sheets[0]
+    assert _time.monotonic() - t0 < 10
+    assert [c.name for c in sheet.columns] == ["Month", "Fuel", "Qty"] and sheet.data_rows == 2
+
+
+def test_an_activity_starting_with_total_is_kept_and_a_subtotal_under_a_merged_site_is_dropped():
+    def build(wb):
+        ws = wb.active
+        ws.append(["Site", "Activity", "Qty"])
+        ws.append(["Total Energies", "Diesel", 500])
+        ws.append(["Plant A", "Diesel", 10])
+        ws.append([None, "Petrol", 20])
+        ws.append([None, "Subtotal", 30])
+        ws.merge_cells("A3:A5")
+        ws.append(["Grand total", None, 530])
+        ws.append(["Total:", None, 530])
+
+    sheet = read_workbook_bytes(xlsx_bytes(build), "xlsx").sheets[0]
+    assert [r["row"] for r in sheet.rows] == [2, 3, 4]
+    assert [(d.row, d.reason) for d in sheet.dropped_rows] == [(5, "total"), (6, "total"), (7, "total")]
+
+
+def test_a_merged_title_above_the_header_is_not_part_of_the_column_names():
+    def build(wb):
+        ws = wb.active
+        ws.append(["Consumption report 2025", None, None])
+        ws.merge_cells("A1:C1")
+        ws.append(["Month", "Fuel", "Qty"])
+        ws.append(["2025-01", "Diesel", 10])
+        ws.append(["2025-02", "Diesel", 12])
+
+    sheet = read_workbook_bytes(xlsx_bytes(build), "xlsx").sheets[0]
+    assert (sheet.header_row, sheet.header_depth) == (2, 1)
+    assert [c.name for c in sheet.columns] == ["Month", "Fuel", "Qty"]
+
+
+def test_year_headings_are_a_header():
+    def build(wb):
+        ws = wb.active
+        ws.append(["Fuel use by year"])
+        ws.append(["Supplier", 2023, 2024, 2025])
+        ws.append(["Acme", 100, 110, 120])
+        ws.append(["Beta", 200, 210, 220])
+
+    sheet = read_workbook_bytes(xlsx_bytes(build), "xlsx").sheets[0]
+    assert sheet.header_row == 2
+    assert [c.name for c in sheet.columns] == ["Supplier", "2023", "2024", "2025"] and sheet.data_rows == 2
+
+
+def test_a_damaged_xlsx_is_a_plain_value_error():
+    with pytest.raises(ValueError, match="could not be read"):
+        read_workbook_bytes(b"PK\x03\x04garbage", "xlsx")
+
+
+def test_day_first_date_headers_make_a_months_as_columns_csv():
+    header = "Activity," + ",".join(f"01/{m:02d}/2025" for m in range(1, 7))
+    content = (header + "\nDiesel,1,2,3,4,5,6\nPetrol,1,2,3,4,5,6\n").encode()
+    sheet = read_workbook_bytes(content, "csv", "pivot.csv").sheets[0]
+    assert sheet.layout == "months_as_columns"
+    assert sheet.columns[1].month == {"month": 1, "year": 2025, "date": "2025-01-31"}
+    assert month_of_header("15/03/2025")["month"] == 3
+
+
+def test_chart_sheets_are_listed_and_keep_their_index():
+    def build(wb):
+        from openpyxl.chart import BarChart
+
+        a = wb.active
+        a.title = "Data1"
+        a.append(["Fuel", "Qty"])
+        a.append(["Diesel", 1])
+        a.append(["Petrol", 2])
+        cs = wb.create_chartsheet("Chart1")
+        cs.add_chart(BarChart())
+        b = wb.create_sheet("Data2")
+        b.append(["Fuel", "Qty"])
+        b.append(["Diesel", 1])
+        b.append(["Petrol", 2])
+
+    sheets = read_workbook_bytes(xlsx_bytes(build), "xlsx").sheets
+    assert [(s.name, s.index, s.skipped_reason) for s in sheets] == [("Data1", 0, None), ("Chart1", 1, "chart sheet"), ("Data2", 2, None)]
