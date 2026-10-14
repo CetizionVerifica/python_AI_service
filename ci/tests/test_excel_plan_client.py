@@ -201,6 +201,27 @@ def test_rows_the_plans_api_would_refuse_become_local_issues():
     assert planned["state"] == "issue" and planned["issues"][0]["severity"] == "error" and planned["local"] is True
 
 
+def test_cells_over_esg_lites_text_limit_are_one_rows_issue_not_a_refused_request():
+    """A 301-character cell would make ESG-lite's schema refuse the whole 2,000-row
+    chunk; the sheet row becomes a TEXT_TOO_LONG local issue and the rest goes."""
+    long = "x" * (plans.TEXT_MAX_CHARS + 1)
+    df = frame(
+        [
+            {"emission_category": long, "activity_value": "10", "activity_data_unit": "litre"},
+            {"emission_category": "Diesel", "activity_value": "10", "activity_data_unit": long},
+            {"emission_category": "Diesel", "activity_value": "", "activity_data_unit": "litre", "extra_notes": long},
+            {"emission_category": "Diesel", "activity_value": "", "activity_data_unit": "litre", "extra_" + "h" * (plans.FIELD_NAME_MAX_CHARS + 1): "ok"},
+            {"emission_category": "Diesel", "activity_value": "10", "activity_data_unit": "litre", "extra_notes": "x" * plans.TEXT_MAX_CHARS},
+            # 151 emoji are 151 code points but 302 UTF-16 units, which is what ESG-lite's schema counts.
+            {"emission_category": "Diesel", "activity_value": "10", "activity_data_unit": "litre", "extra_notes": "\U0001F525" * 151},
+        ]
+    )
+    sheet = plans.rows_from_frame(df, [], SITE, CATEGORY, MONTH_END)
+    assert [(i.row, i.code) for i in sheet.local_issues] == [(1, "TEXT_TOO_LONG"), (2, "TEXT_TOO_LONG"), (3, "TEXT_TOO_LONG"), (4, "TEXT_TOO_LONG"), (6, "TEXT_TOO_LONG")]
+    assert all(len(i.emission_category or "") <= plans.TEXT_MAX_CHARS for i in sheet.local_issues)
+    assert [r["row_ref"] for r in sheet.rows] == ["Row 5"]
+
+
 def test_ticked_categories_keep_sheet_row_numbers():
     df = frame([{"emission_category": c, "activity_value": "1", "activity_data_unit": "litre"} for c in ["Diesel", "Petrol", "Diesel"]])
     sheet = plans.rows_from_frame(df, ["Diesel"], SITE, CATEGORY, MONTH_END)
@@ -446,6 +467,29 @@ def test_import_commits_the_previewed_plan_once_and_writes_no_emission_rows(api,
     # A second import of the same file is refused.
     again = client.post("/v1/excel/import", json=body(plan_id=plan["plan_id"], version=plan["version"]), headers=headers)
     assert again.status_code == 409
+
+
+def test_a_failed_file_delete_still_marks_the_document_imported(world, throwaway_db, monkeypatch):
+    """The rows are on ESG-lite by the time the file is deleted, so a storage
+    hiccup must not leave the document "importing" (a retry would then be
+    refused as already being imported for a batch that landed)."""
+    from app.services import excel_parser as ep
+
+    def boom(public_id):
+        raise RuntimeError("storage down")
+
+    monkeypatch.setattr(ep.cloudinary_service, "delete_file", boom)
+    with throwaway_db.cursor() as cur:
+        cur.execute("UPDATE uploaded_documents SET cloudinary_public_id = 'asset-1', status = 'importing' WHERE id = %s", (DOC,))
+    ep.delete_document_file(DOC, new_status="imported")
+    with throwaway_db.cursor() as cur:
+        cur.execute("SELECT status FROM uploaded_documents WHERE id = %s", (DOC,))
+        assert cur.fetchone()[0] == "imported"
+    # A cleanup that fails keeps its status, so list_documents_for_cleanup retries it next run.
+    ep.delete_document_file(DOC)
+    with throwaway_db.cursor() as cur:
+        cur.execute("SELECT status FROM uploaded_documents WHERE id = %s", (DOC,))
+        assert cur.fetchone()[0] == "imported"
 
 
 def test_import_without_a_plan_plans_then_commits(api):

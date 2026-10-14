@@ -295,7 +295,9 @@ def test_parse_bom_needs_a_manager_or_superadmin(client):
 
 
 def test_parse_bom_keeps_the_file_as_evidence(client, throwaway_db):
-    r = client.post(BOM_URL, headers=bearer(MANAGER_A), **upload(study_id="7", batch_units="1000"))
+    # One workbook for the upload and the size check: openpyxl stamps the creation time, so two builds can differ by a few bytes.
+    content = xlsx(("BOM", BOM))
+    r = client.post(BOM_URL, headers=bearer(MANAGER_A), **upload(content, study_id="7", batch_units="1000"))
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["batch_units"] == 1000
@@ -303,7 +305,7 @@ def test_parse_bom_keeps_the_file_as_evidence(client, throwaway_db):
     assert ev["document_name"] == "bom.xlsx" and ev["stored"] == "local"
     with throwaway_db.cursor() as cur:
         cur.execute("SELECT kind, document_name, pcf_study_id, uploaded_by, file_size FROM pcf_evidence WHERE id = %s", (ev["id"],))
-        assert cur.fetchone() == ("bom", "bom.xlsx", 7, MANAGER_A, len(xlsx(("BOM", BOM))))
+        assert cur.fetchone() == ("bom", "bom.xlsx", 7, MANAGER_A, len(content))
     assert os.path.exists(ev["url"])
     os.remove(ev["url"])
 
