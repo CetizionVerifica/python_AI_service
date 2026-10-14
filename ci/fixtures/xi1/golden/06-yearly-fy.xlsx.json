@@ -1,0 +1,89 @@
+{
+  "name": "06-yearly-fy.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "FY 2024-25",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Activity",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 3,
+          "samples": [
+            "Diesel generators",
+            "LPG",
+            "Electricity"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "FY 2024-25 (Apr-Mar)",
+          "letter": "B",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "8800",
+            "1200",
+            "410000"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Unit",
+          "letter": "C",
+          "dtype": "text",
+          "distinct": 3,
+          "samples": [
+            "L",
+            "kg",
+            "kWh"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Scope",
+          "letter": "D",
+          "dtype": "text",
+          "distinct": 2,
+          "samples": [
+            "Scope 1",
+            "Scope 2"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [
+        {
+          "row": 5,
+          "reason": "total"
+        }
+      ],
+      "layout": "rows",
+      "fingerprint": "1eba01d471ec6c4f0bbdce54527fdb80ad99b30f79c3a0807247bff304120b7a",
+      "data_rows": 3,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "FY 2024-25!A2",
+        "FY 2024-25!A3",
+        "FY 2024-25!A4"
+      ]
+    }
+  ]
+}

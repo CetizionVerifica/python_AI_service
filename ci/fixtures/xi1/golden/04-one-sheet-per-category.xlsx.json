@@ -1,0 +1,254 @@
+{
+  "name": "04-one-sheet-per-category.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "Stationary combustion",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Period",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 6,
+          "samples": [
+            "2025-01",
+            "2025-02",
+            "2025-03",
+            "2025-04",
+            "2025-05"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Fuel type",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Furnace oil"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Consumption",
+          "letter": "C",
+          "dtype": "number",
+          "distinct": 6,
+          "samples": [
+            "900",
+            "901",
+            "902",
+            "903",
+            "904"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Unit",
+          "letter": "D",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "litre"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "ce1e57323ce5c573b7da6c05efc1a8dffef0d6d5dfe45c87f20196927bf84c67",
+      "data_rows": 6,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Stationary combustion!A2",
+        "Stationary combustion!A3",
+        "Stationary combustion!A4"
+      ]
+    },
+    {
+      "name": "Purchased electricity",
+      "index": 1,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Period",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 6,
+          "samples": [
+            "2025-01",
+            "2025-02",
+            "2025-03",
+            "2025-04",
+            "2025-05"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Source",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Grid"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "kWh",
+          "letter": "C",
+          "dtype": "number",
+          "distinct": 6,
+          "samples": [
+            "15000",
+            "15100",
+            "15200",
+            "15300",
+            "15400"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "02d52d9fe8aa59b822c5fb6e1b8d0c337ebce96a57addb14f3c822aec4b68e5d",
+      "data_rows": 6,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Purchased electricity!A2",
+        "Purchased electricity!A3",
+        "Purchased electricity!A4"
+      ]
+    },
+    {
+      "name": "Business travel",
+      "index": 2,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Date",
+          "letter": "A",
+          "dtype": "date",
+          "distinct": 5,
+          "samples": [
+            "2025-03-01",
+            "2025-03-02",
+            "2025-03-03",
+            "2025-03-04",
+            "2025-03-05"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Mode",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Air"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "From",
+          "letter": "C",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "BLR"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "To",
+          "letter": "D",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "DEL"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Distance (km)",
+          "letter": "E",
+          "dtype": "number",
+          "distinct": 1,
+          "samples": [
+            "1700"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [
+            "km"
+          ],
+          "month": null
+        },
+        {
+          "name": "Passengers",
+          "letter": "F",
+          "dtype": "number",
+          "distinct": 1,
+          "samples": [
+            "1"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "a0eb459c675e323c6255c45593337944d42454022ca56e0129c0a40b7f5a8a42",
+      "data_rows": 5,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Business travel!A2",
+        "Business travel!A3",
+        "Business travel!A4"
+      ]
+    }
+  ]
+}

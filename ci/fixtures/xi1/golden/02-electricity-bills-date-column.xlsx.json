@@ -1,0 +1,110 @@
+{
+  "name": "02-electricity-bills-date-column.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "Bills",
+      "index": 0,
+      "header_row": 3,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Bill date",
+          "letter": "A",
+          "dtype": "date",
+          "distinct": 10,
+          "samples": [
+            "2025-01-15",
+            "2025-02-15",
+            "2025-03-15",
+            "2025-04-15",
+            "2025-05-15"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Meter no",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 10,
+          "samples": [
+            "MTR-100",
+            "MTR-101",
+            "MTR-102",
+            "MTR-103",
+            "MTR-104"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Supplier",
+          "letter": "C",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "State grid"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Units consumed (kWh)",
+          "letter": "D",
+          "dtype": "number",
+          "distinct": 10,
+          "samples": [
+            "4500",
+            "4537",
+            "4574",
+            "4611",
+            "4648"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [
+            "kwh"
+          ],
+          "month": null
+        },
+        {
+          "name": "Amount (INR)",
+          "letter": "E",
+          "dtype": "number",
+          "distinct": 10,
+          "samples": [
+            "38000",
+            "38300",
+            "38600",
+            "38900",
+            "39200"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [
+            "inr"
+          ],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "8dc561dc274ff9e95f79d6f33e62208e586db102998669993d79a030f443d51a",
+      "data_rows": 10,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Bills!A4",
+        "Bills!A5",
+        "Bills!A6"
+      ]
+    }
+  ]
+}

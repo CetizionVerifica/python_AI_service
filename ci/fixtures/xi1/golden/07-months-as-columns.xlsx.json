@@ -1,0 +1,286 @@
+{
+  "name": "07-months-as-columns.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "Pivot",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Activity",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 3,
+          "samples": [
+            "Diesel",
+            "Petrol",
+            "Grid electricity"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Unit",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 2,
+          "samples": [
+            "litre",
+            "kWh"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Jan-25",
+          "letter": "C",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1000",
+            "200",
+            "30000"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 1,
+            "year": 2025,
+            "date": "2025-01-31"
+          }
+        },
+        {
+          "name": "Feb-25",
+          "letter": "D",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1005",
+            "201",
+            "30100"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 2,
+            "year": 2025,
+            "date": "2025-02-28"
+          }
+        },
+        {
+          "name": "Mar-25",
+          "letter": "E",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1010",
+            "202",
+            "30200"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 3,
+            "year": 2025,
+            "date": "2025-03-31"
+          }
+        },
+        {
+          "name": "Apr-25",
+          "letter": "F",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1015",
+            "203",
+            "30300"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 4,
+            "year": 2025,
+            "date": "2025-04-30"
+          }
+        },
+        {
+          "name": "May-25",
+          "letter": "G",
+          "dtype": "number",
+          "distinct": 2,
+          "samples": [
+            "1020",
+            "204"
+          ],
+          "fill_ratio": 0.667,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 5,
+            "year": 2025,
+            "date": "2025-05-31"
+          }
+        },
+        {
+          "name": "Jun-25",
+          "letter": "H",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1025",
+            "205",
+            "30500"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 6,
+            "year": 2025,
+            "date": "2025-06-30"
+          }
+        },
+        {
+          "name": "Jul-25",
+          "letter": "I",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1030",
+            "206",
+            "30600"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 7,
+            "year": 2025,
+            "date": "2025-07-31"
+          }
+        },
+        {
+          "name": "Aug-25",
+          "letter": "J",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1035",
+            "207",
+            "30700"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 8,
+            "year": 2025,
+            "date": "2025-08-31"
+          }
+        },
+        {
+          "name": "Sep-25",
+          "letter": "K",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1040",
+            "208",
+            "30800"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 9,
+            "year": 2025,
+            "date": "2025-09-30"
+          }
+        },
+        {
+          "name": "Oct-25",
+          "letter": "L",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1045",
+            "209",
+            "30900"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 10,
+            "year": 2025,
+            "date": "2025-10-31"
+          }
+        },
+        {
+          "name": "Nov-25",
+          "letter": "M",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1050",
+            "210",
+            "31000"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 11,
+            "year": 2025,
+            "date": "2025-11-30"
+          }
+        },
+        {
+          "name": "Dec-25",
+          "letter": "N",
+          "dtype": "number",
+          "distinct": 3,
+          "samples": [
+            "1055",
+            "211",
+            "31100"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": {
+            "month": 12,
+            "year": 2025,
+            "date": "2025-12-31"
+          }
+        }
+      ],
+      "dropped_rows": [
+        {
+          "row": 5,
+          "reason": "total"
+        }
+      ],
+      "layout": "months_as_columns",
+      "fingerprint": "eaf48a3540d81918af8781f50330babc55a0247cbfb1ff6053fe85087e3d04e1",
+      "data_rows": 3,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Pivot!A2",
+        "Pivot!A3",
+        "Pivot!A4"
+      ]
+    }
+  ]
+}
