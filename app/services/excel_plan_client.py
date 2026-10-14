@@ -439,6 +439,7 @@ def plan_sheet(
     state: Optional[str] = None,
     cancel_plan_id: Optional[str] = None,
     mapping: Optional[dict] = None,
+    code: Optional[str] = None,
 ) -> dict:
     """Plan the sheet's rows and answer with the plan and a page of its rows.
 
@@ -460,7 +461,7 @@ def plan_sheet(
         raise ValueError("No rows to import. Check the category and unit columns and the ticked categories.")
 
     plan = create_plan_from_rows(client, source_name, sheet.rows, company_id, mapping=mapping)
-    return plan_page(client, plan["plan_id"], page=page, page_size=page_size, state=state, local_issues=sheet.local_issues, not_selected=sheet.not_selected, sheet_rows=sheet.total_rows)
+    return plan_page(client, plan["plan_id"], page=page, page_size=page_size, state=state, code=code, local_issues=sheet.local_issues, not_selected=sheet.not_selected, sheet_rows=sheet.total_rows)
 
 
 def plan_page(
@@ -470,21 +471,27 @@ def plan_page(
     page: int = 1,
     page_size: int = 100,
     state: Optional[str] = None,
+    code: Optional[str] = None,
     local_issues: Optional[list[LocalIssue]] = None,
     not_selected: int = 0,
     sheet_rows: Optional[int] = None,
 ) -> dict:
-    """One page of an existing plan, in the shape ``/v1/excel/preview`` answers."""
-    res = client.get_plan(plan_id, page=page, page_size=page_size, state=state)
+    """One page of an existing plan, in the shape ``/v1/excel/preview`` answers.
+
+    ``state`` and ``code`` filter ESG-lite's rows on the server (so paging and
+    ``total_rows`` stay right past the first page) and the local rows the same way.
+    """
+    res = client.get_plan(plan_id, page=page, page_size=page_size, state=state, code=code)
     rows = [preview_row(r) for r in (res.get("rows") or [])]
     local = local_issues or []
-    if local and page == 1 and state in (None, "", "issue"):
-        rows = [preview_row(i.as_planned_row()) for i in local] + rows
+    shown = [i for i in local if (not state or i.as_planned_row()["state"] == state) and (not code or i.code == code)]
+    if shown and page == 1:
+        rows = [preview_row(i.as_planned_row()) for i in shown] + rows
     summary = _with_local_counts(plan_summary(res), local)
     return {
         "plan": summary,
         "rows": rows,
-        "total_rows": int(res.get("total_rows") or 0) + (len(local) if state in (None, "", "issue") else 0),
+        "total_rows": int(res.get("total_rows") or 0) + len(shown),
         "page": int(res.get("page") or page),
         "page_size": int(res.get("page_size") or page_size),
         "not_selected": not_selected,

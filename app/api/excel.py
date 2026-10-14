@@ -196,7 +196,7 @@ def preview(payload: dict, request: Request, principal: Principal = Depends(requ
     Since IM11 the calculation is ESG-lite's: the rows go to POST /imports/plans
     as ``bulk_upload`` and come back planned (factor, total, FERA twin, issues).
     With ``plan_id`` the call only pages that plan (``page``, ``page_size``,
-    ``state``); ``cancel_plan_id`` frees the plan of an earlier preview.
+    ``state``, ``code``); ``cancel_plan_id`` frees the plan of an earlier preview.
     """
     # site_id is checked against the caller's sites by enforce_site_scope, and again by ESG-lite.
     document_id = _own_document(payload.get("document_id"), principal)
@@ -205,11 +205,12 @@ def preview(payload: dict, request: Request, principal: Principal = Depends(requ
         page = int(payload.get("page", 1))
         page_size = int(payload.get("page_size", 100))
         state = payload.get("state") or None
+        code = payload.get("code") or None
         sheet, ctx = _sheet_rows(payload)
         with plans.PlanClient(_bearer(request)) as client:
             plan_id = payload.get("plan_id")
             if plan_id:
-                return plans.plan_page(client, str(plan_id), page=page, page_size=page_size, state=state, local_issues=sheet.local_issues, not_selected=sheet.not_selected, sheet_rows=sheet.total_rows)
+                return plans.plan_page(client, str(plan_id), page=page, page_size=page_size, state=state, code=code, local_issues=sheet.local_issues, not_selected=sheet.not_selected, sheet_rows=sheet.total_rows)
             company_id = company_id_for_site(ctx["site_id"]) if principal.is_superadmin else None
             return plans.plan_sheet(
                 client,
@@ -219,6 +220,7 @@ def preview(payload: dict, request: Request, principal: Principal = Depends(requ
                 page=page,
                 page_size=page_size,
                 state=state,
+                code=code,
                 cancel_plan_id=payload.get("cancel_plan_id") or None,
                 mapping=ctx.get("mapping"),
             )
