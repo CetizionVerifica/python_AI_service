@@ -38,3 +38,4 @@ Files: `app/services/workbook/reader.py` (+ `__init__.py`), fixtures `ci/fixture
 - Text dates are day first: "01/03/2025" is March 2025 ("2025/03/01" is year first), so a CSV pivot with date headings is `months_as_columns`.
 - A damaged .xlsx is a plain `ValueError` with a message for the user.
 - Chart sheets are listed (`skipped_reason: "chart sheet"`), so every sheet keeps its index in the workbook.
+- **Totals labelled at the end (audit, 2026-10-14).** A text cell before the first number that ends with "total" or "subtotal" ("Q1 subtotal", "Plant A Total", "Site sub-total:") is a total too. A name that only starts with the word ("Total Energies") is still data. XI6 case 09 reads 6 data rows.
