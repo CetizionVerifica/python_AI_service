@@ -194,3 +194,50 @@ def test_part_of_header(header, part):
 
 def test_unknown_header_means_nothing():
     assert part_of_header("Remarks") == [] and part_of_header("") == []
+
+
+
+# ---------------------------------------------------------------------------
+# Review findings (2026-10-14)
+# ---------------------------------------------------------------------------
+
+
+def test_a_profile_hit_applies_the_saved_activity_matches():
+    profile = saved_profile_for("07-months-as-columns.xlsx")
+    sp = profile["sheet_proposal"]
+    sp["category"] = {"kind": "fixed", "id": 4, "label": "Mobile combustion", "confidence": 1.0, "source": "profile"}
+    sp["activities"] = [{"sheet_text": "Grid electricity", "category_id": 4, "factor_name": "CNG", "confidence": 1.0, "source": "profile", "save_mapping": False}]
+    s = proposal_for("07-months-as-columns.xlsx", profiles=[profile]).sheets[0]
+    match = {a.sheet_text: a for a in s.activities}["Grid electricity"]
+    assert (match.factor_name, match.source, match.confidence) == ("CNG", "profile", 1.0)
+
+
+@pytest.mark.parametrize(
+    "text, ok",
+    [("Plant 2", True), ("plant-2", True), ("Plant 2 site", True), ("Plant 22", False), ("Plant 2 - Hyd", False), ("Plant 9", False), ("2", True)],
+)
+def test_a_site_cell_names_the_site_only_when_it_says_the_same(text, ok):
+    from app.services.mapping.match import names_site
+
+    assert names_site(text, "Plant 2", ["Plant 9"]) is ok
+    assert names_site("Pune 2", "Pune", []) is False and names_site("Pune plant", "Pune", []) is True
+
+
+def test_a_cell_longer_than_the_contract_allows_does_not_break_the_proposal():
+    import io
+
+    from openpyxl import Workbook as XlsxWorkbook
+
+    from app.services.workbook import read_workbook_bytes
+
+    wb = XlsxWorkbook()
+    ws = wb.active
+    ws.title = "Fuel"
+    ws.append(["Month", "Fuel", "Qty", "Unit"])
+    ws.append(["2025-01", "Diesel", 10, "litre"])
+    ws.append(["2025-02", "x" * 400, 12, "litre"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    p = propose(read_workbook_bytes(buf.getvalue(), "xlsx"), 1, ctx(), [], lookup())
+    MappingProposal.model_validate(p.model_dump())
+    assert [a.sheet_text for a in p.sheets[0].activities] == ["Diesel"]

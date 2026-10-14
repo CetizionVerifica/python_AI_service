@@ -104,3 +104,62 @@ def test_large_ledger_maps_every_row_within_the_plan_limit():
     _, _, sr = planned("12-large-ledger.csv")
     assert len(sr.rows) == 15000 and sr.total_rows == 15000
     assert sr.rows[-1]["row_ref"] == "12-large-ledger!A15001"
+
+
+
+# ---------------------------------------------------------------------------
+# Review findings (2026-10-14)
+# ---------------------------------------------------------------------------
+
+
+def _pivot_workbook(cells):
+    import io
+
+    from openpyxl import Workbook as XlsxWorkbook
+
+    from app.services.workbook import read_workbook_bytes
+
+    wb = XlsxWorkbook()
+    ws = wb.active
+    ws.title = "Pivot"
+    months = ["Jan-25", "Feb-25", "Mar-25", "Apr-25", "May-25", "Jun-25"]
+    ws.append(["Activity", "Unit"] + months)
+    for row in cells:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return read_workbook_bytes(buf.getvalue(), "xlsx")
+
+
+def _pivot_rows(cells, unit_column=True):
+    wb = _pivot_workbook(cells)
+    p = propose(wb, 1, ctx(), [], lookup())
+    if not unit_column:
+        d = p.model_dump()
+        for f in d["sheets"][0]["fields"]:
+            if f["key"] == "activity_unit":
+                f["column"], f["skipped"] = None, True
+        p = MappingProposal.model_validate(d)
+    return rows_from_proposal(wb, p)
+
+
+def test_a_unit_seen_in_one_month_cell_is_not_the_unit_of_the_others():
+    sr = _pivot_rows([["Diesel", None, "5 t", 6, 7, 8, 9, 10], ["Petrol", None, 1, 2, 3, 4, 5, 6]], unit_column=False)
+    assert [(r["row_ref"], r["activity_unit"]) for r in sr.rows if r["row_ref"].startswith("Pivot!C")] == [("Pivot!C2", "t")]
+    others = [i for i in sr.local_issues if i.code == "MISSING_UNIT"]
+    assert len(others) == 11
+
+
+def test_months_as_columns_cells_that_are_not_numbers_are_flagged_and_dashes_are_blank():
+    sr = _pivot_rows([["Diesel", "litre", 10, "NA", "-", "abc", "35 m3", 12], ["Petrol", "litre", 1, 2, 3, 4, 5, 6]])
+    by_ref = {r["row_ref"]: r for r in sr.rows}
+    issues = {i.row_ref: (i.code, i.severity) for i in sr.local_issues}
+    assert issues["Pivot!D2"] == ("PIVOT_EMPTY_CELL", "info") and issues["Pivot!E2"] == ("PIVOT_EMPTY_CELL", "info")
+    assert issues["Pivot!F2"] == ("VALUE_NOT_NUMERIC", "error")
+    assert by_ref["Pivot!G2"]["activity_value"] == 35.0
+    assert all("fields" not in r or "activity_value" not in r["fields"] for r in sr.rows)
+
+
+def test_a_row_with_a_cell_too_long_for_esg_lite_is_kept_back():
+    sr = _pivot_rows([["Diesel", "litre", 1, 2, 3, 4, 5, 6], ["y" * 301, "litre", 1, 2, 3, 4, 5, 6]])
+    assert {i.code for i in sr.local_issues} == {"TEXT_TOO_LONG"} and len(sr.rows) == 6

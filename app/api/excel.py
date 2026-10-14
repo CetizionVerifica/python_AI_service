@@ -3,6 +3,9 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
+from typing import Optional
+
+from pydantic import ValidationError
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
 from app.services.excel_parser import (
     delete_document_file,
@@ -175,11 +178,11 @@ def _esg_lite_http_error(e: plans.EsgLiteError) -> HTTPException:
     return HTTPException(status_code=e.status, detail=e.body())
 
 
-def _sheet_rows(payload: dict) -> tuple[plans.SheetRows, dict]:
+def _sheet_rows(payload: dict, principal: Optional[Principal] = None) -> tuple[plans.SheetRows, dict]:
     """The sheet's rows as ImportRows: from a confirmed ``proposal`` (smart import, XI2)
     or from the site, category, month and column mappings in the payload (contributor path)."""
     if payload.get("proposal") is not None:
-        return mapping_api.sheet_rows_from_proposal(payload)
+        return mapping_api.sheet_rows_from_proposal(payload, principal)
     site_id = int(payload.get("site_id"))
     category_id = int(payload.get("category_id"))
     date_of_reporting = str(payload.get("date_of_reporting"))
@@ -206,7 +209,7 @@ def preview(payload: dict, request: Request, principal: Principal = Depends(requ
         page_size = int(payload.get("page_size", 100))
         state = payload.get("state") or None
         code = payload.get("code") or None
-        sheet, ctx = _sheet_rows(payload)
+        sheet, ctx = _sheet_rows(payload, principal)
         with plans.PlanClient(_bearer(request)) as client:
             plan_id = payload.get("plan_id")
             if plan_id:
@@ -263,6 +266,10 @@ def propose(payload: dict, request: Request, principal: Principal = Depends(requ
         raise
     except plans.EsgLiteError as e:
         raise _esg_lite_http_error(e)
+    except ValidationError as e:
+        # Never echo the input: a validation error carries the cell text.
+        logger.warning(f"propose for document {document_id}: proposal failed validation ({len(e.errors())} errors)")
+        raise HTTPException(status_code=422, detail="This file could not be turned into a mapping. Check for very long cells and try again.")
     except (TypeError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -290,7 +297,7 @@ def bulk_import(payload: dict, request: Request, principal: Principal = Depends(
             raise HTTPException(status_code=409, detail="This file is already being imported.")
         raise HTTPException(status_code=409, detail="This file has already been imported. Please re-upload it to import again.")
     try:
-        sheet, ctx = _sheet_rows(payload)
+        sheet, ctx = _sheet_rows(payload, principal)
         with plans.PlanClient(_bearer(request)) as client:
             plan_id = payload.get("plan_id")
             version = payload.get("version")

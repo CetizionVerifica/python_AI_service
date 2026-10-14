@@ -19,6 +19,7 @@ import hashlib
 import io
 import math
 import re
+import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time
 from pathlib import Path
@@ -26,6 +27,8 @@ from typing import Any, Iterable, Optional, Union
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.exceptions import InvalidFileException
+from openpyxl.worksheet.worksheet import Worksheet
 
 from app.schemas.mapping import MAPPING_SHEETS_PER_WORKBOOK
 
@@ -43,10 +46,19 @@ SAMPLE_VALUES = 5
 MONTH_COLUMNS_MIN = 6
 # Cells wider than this are cut in the description (never in the rows).
 HEADER_MAX_CHARS = 200
+# Columns read per sheet: a sheet formatted out to column XFD is read only as wide as its last value, and never wider than this.
+MAX_COLUMNS = 512
 
 DType = str  # "text" | "number" | "date" | "mixed" | "empty"
 
-_TOTAL_RE = re.compile(r"^\s*(grand\s+)?(sub[\s-]?)?totals?\b", re.IGNORECASE)
+# A total label: the word alone, or followed by punctuation, a year or number, a bracket, or "for"/"of" ("Total (kWh)",
+# "Sub-total: Plant A", "Total for FY25"). "Total Energies" (an activity or supplier) is not one.
+_TOTAL_RE = re.compile(
+    r"^\s*(grand\s+)?(sub[\s-]?)?totals?\s*($|[:\-–(\[]|\d|\w*\d|(for|of|ytd|fy|cy|year|annual|quarter|month)\b)", re.IGNORECASE
+)
+# Whole numbers read as year headings ("Supplier | 2023 | 2024").
+_YEAR_MIN, _YEAR_MAX = 1990, 2100
+_DAY_FIRST_RE = re.compile(r"^(?P<a>\d{1,2})[/.-](?P<b>\d{1,2})[/.-](?P<y>\d{4})$|^(?P<y2>\d{4})[/.](?P<m2>\d{1,2})[/.](?P<d2>\d{1,2})$")
 _LETTER_LABEL_RE = re.compile(r"^[A-Z]{1,2}$")
 _NUMBER_RE = re.compile(r"^[+-]?\s*(\d{1,3}(,\d{2,3})+|\d+)(\.\d+)?\s*$")
 _DATE_TEXT_RE = re.compile(
@@ -222,6 +234,14 @@ def month_of_header(name: str) -> Optional[dict]:
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
         y, m, _ = (int(p) for p in text.split("-"))
         return _month(m, y)
+    m = _DAY_FIRST_RE.match(text)
+    if m:
+        # Day first ("01/03/2025" is 1 March), as everywhere else in the import; "2025/03/01" is year first.
+        if m.group("y2"):
+            return _month(int(m.group("m2")), int(m.group("y2")))
+        a, b = int(m.group("a")), int(m.group("b"))
+        month = b if b <= 12 else a
+        return _month(month, int(m.group("y")))
     m = _MONTH_ISO_RE.match(text)
     if m:
         year = int(m.group("y") or m.group("y2"))
@@ -292,19 +312,30 @@ class _Grid:
     rows: list[list[Any]]  # rows[i] is sheet row i+1
     hidden: bool = False
     first_col: int = 1  # 1-based column of rows[i][0]
+    chart: bool = False  # a chart sheet: listed, never read
 
 
 def _xlsx_grids(content: bytes) -> list[_Grid]:
-    wb = load_workbook(io.BytesIO(content), data_only=True, read_only=False)
+    try:
+        wb = load_workbook(io.BytesIO(content), data_only=True, read_only=False)
+    except (zipfile.BadZipFile, InvalidFileException, KeyError, OSError, ValueError) as e:
+        raise ValueError("This file could not be read as an .xlsx workbook. Open it in Excel, save it again and upload it.") from e
     grids: list[_Grid] = []
     try:
-        for index, ws in enumerate(wb.worksheets):
-            max_row, max_col = ws.max_row or 0, ws.max_column or 0
+        # wb.sheetnames lists chart sheets too, so every sheet keeps its place in the workbook.
+        for index, title in enumerate(wb.sheetnames):
+            ws = wb[title]
+            if not isinstance(ws, Worksheet):
+                grids.append(_Grid(name=str(title), index=index, rows=[], hidden=getattr(ws, "sheet_state", "visible") != "visible", chart=True))
+                continue
+            # Only cells holding a value count: a format applied out to XFD1048576 must not size the grid.
+            values = {(r, c): cell.value for (r, c), cell in ws._cells.items() if cell.value is not None}
+            max_row = max((r for r, _ in values), default=0)
+            max_col = min(max((c for _, c in values), default=0), MAX_COLUMNS)
             rows: list[list[Any]] = [[None] * max_col for _ in range(max_row)]
-            for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
-                for cell in row:
-                    if cell.value is not None:
-                        rows[cell.row - 1][cell.column - 1] = cell.value
+            for (r, c), v in values.items():
+                if c <= max_col:
+                    rows[r - 1][c - 1] = v
             # Merged cells: every cell of a range reads as the range's top-left value.
             for rng in list(ws.merged_cells.ranges):
                 top = rows[rng.min_row - 1][rng.min_col - 1] if rng.min_row - 1 < max_row and rng.min_col - 1 < max_col else None
@@ -327,8 +358,8 @@ def _csv_grids(content: bytes, name: str) -> list[_Grid]:
     except csv.Error:
         dialect = csv.excel
     rows = [[(v if v.strip() else None) for v in row] for row in csv.reader(io.StringIO(text), dialect)]
-    width = max((len(r) for r in rows), default=0)
-    rows = [r + [None] * (width - len(r)) for r in rows]
+    width = min(max((len(r) for r in rows), default=0), MAX_COLUMNS)
+    rows = [(r + [None] * (width - len(r)))[:width] for r in rows]
     return [_Grid(name=name, index=0, rows=rows)]
 
 
@@ -341,7 +372,7 @@ def _xls_grids(content: bytes) -> list[_Grid]:
         raise ValueError("Reading .xls needs the xlrd package; save the file as .xlsx and upload again.") from e
     grids = []
     for index, (name, df) in enumerate(frames.items()):
-        rows = [[(None if (isinstance(v, float) and math.isnan(v)) else v) for v in rec] for rec in df.itertuples(index=False, name=None)]
+        rows = [[(None if (isinstance(v, float) and math.isnan(v)) else v) for v in rec[:MAX_COLUMNS]] for rec in df.itertuples(index=False, name=None)]
         grids.append(_Grid(name=str(name), index=index, rows=rows))
     return grids
 
@@ -351,20 +382,43 @@ def _xls_grids(content: bytes) -> list[_Grid]:
 # ---------------------------------------------------------------------------
 
 
+def _is_year(value: Any) -> bool:
+    text = cell_text(value)
+    return bool(re.fullmatch(r"\d{4}", text)) and _YEAR_MIN <= int(text) <= _YEAR_MAX
+
+
 def _profile(row: list[Any]) -> dict:
+    """Share of text, number and date cells among the filled ones, and ``header``:
+    the share that can be header cells. Next to at least one text cell, two or
+    more year numbers ("2023 | 2024") or six or more month dates count as header
+    cells and not as numbers or dates."""
     kinds = [cell_kind(v) for v in row]
-    filled = [k for k in kinds if k != "empty"]
+    filled = [(k, v) for k, v in zip(kinds, row) if k != "empty"]
     n = len(filled)
+    text = sum(k == "text" for k, _ in filled)
+    numbers = sum(k == "number" for k, _ in filled)
+    dates = sum(k == "date" for k, _ in filled)
+    years = sum(k == "number" and _is_year(v) for k, v in filled)
+    month_dates = sum(k == "date" and month_of_header(v) is not None for k, v in filled)
+    heading_years = years if text and years >= 2 else 0
+    heading_dates = month_dates if text and month_dates >= MONTH_COLUMNS_MIN else 0
     return {
         "filled": n,
-        "text": sum(k == "text" for k in filled) / n if n else 0.0,
-        "number": sum(k == "number" for k in filled) / n if n else 0.0,
-        "date": sum(k == "date" for k in filled) / n if n else 0.0,
+        "distinct": len({cell_text(v) for _, v in filled}),
+        "text": text / n if n else 0.0,
+        "header": (text + heading_years + heading_dates) / n if n else 0.0,
+        "number": (numbers - heading_years) / n if n else 0.0,
+        "date": (dates - heading_dates) / n if n else 0.0,
     }
 
 
 def _headerish(p: dict) -> bool:
-    return p["filled"] >= 2 and p["text"] >= HEADER_TEXT_RATIO and p["number"] == 0
+    return p["filled"] >= 2 and p["header"] >= HEADER_TEXT_RATIO and p["number"] == 0 and p["text"] > 0
+
+
+def _is_title(p: dict) -> bool:
+    """One text repeated across the row: a merged title, not a header."""
+    return p["filled"] >= 2 and p["distinct"] == 1
 
 
 def _is_legend(row: list[Any]) -> bool:
@@ -373,10 +427,15 @@ def _is_legend(row: list[Any]) -> bool:
 
 
 def _is_total(row: list[Any]) -> bool:
+    """A total row: one of the text cells before the first number is a total
+    label. Checking every leading label, not only the first cell, catches a
+    "Subtotal" under a merged (filled-down) site name."""
     for v in row:
-        text = cell_text(v)
-        if text:
-            return bool(_TOTAL_RE.match(text)) and cell_kind(v) == "text"
+        kind = cell_kind(v)
+        if kind == "number":
+            return False
+        if kind == "text" and _TOTAL_RE.match(cell_text(v)):
+            return True
     return False
 
 
@@ -391,7 +450,7 @@ def detect_header(rows: list[list[Any]]) -> tuple[int, int]:
     profiles = [_profile(r) for r in rows[:limit + HEADER_MAX_DEPTH + 3]]
     for i in range(limit):
         p = profiles[i]
-        if not _headerish(p):
+        if not _headerish(p) or _is_title(p):
             continue
         following = profiles[i + 1 : i + 1 + HEADER_MAX_DEPTH + 3]
         if not any(q["filled"] > 0 and (q["number"] > 0 or q["date"] > 0 or q["filled"] != p["filled"] or not _headerish(q)) for q in following):
@@ -450,8 +509,9 @@ def _header_names(rows: list[list[Any]], header_row: int, depth: int, first_col:
 def _describe_sheet(grid: _Grid) -> Sheet:
     rows = grid.rows
     base = dict(name=grid.name, index=grid.index, hidden=grid.hidden)
-    if grid.hidden:
-        return Sheet(**base, header_row=1, header_depth=1, columns=[], rows=[], dropped_rows=[], layout="rows", fingerprint=fingerprint_of([], 1), data_rows=0, skipped_reason="hidden")
+    if grid.chart or grid.hidden:
+        reason = "chart sheet" if grid.chart else "hidden"
+        return Sheet(**base, header_row=1, header_depth=1, columns=[], rows=[], dropped_rows=[], layout="rows", fingerprint=fingerprint_of([], 1), data_rows=0, skipped_reason=reason)
     # Trim trailing all-empty rows.
     while rows and all(cell_kind(v) == "empty" for v in rows[-1]):
         rows = rows[:-1]
