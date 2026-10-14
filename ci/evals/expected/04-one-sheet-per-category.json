@@ -1,0 +1,91 @@
+{
+  "case": "04-one-sheet-per-category",
+  "workbook": "04-one-sheet-per-category.xlsx",
+  "caller": "manager",
+  "site_id": 1,
+  "expect_status": 200,
+  "expect_error": null,
+  "max_model_calls": 3,
+  "min_profile_hits": 0,
+  "sheets": [
+    {
+      "sheet_name": "Fuel",
+      "layout": "rows",
+      "data_rows": 4,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Qty",
+        "activity_unit": "Unit",
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Electricity",
+      "layout": "rows",
+      "data_rows": 4,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Travel",
+      "layout": "rows",
+      "data_rows": 4,
+      "category_id": 3,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "km",
+        "activity_unit": null,
+        "activity_name": "Mode",
+        "Distance": "km"
+      },
+      "activities": {
+        "Domestic flight – economy": "Domestic flight – economy"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    }
+  ],
+  "plan": {
+    "rows": 12,
+    "out_of_scope_rows": 0,
+    "issues": {},
+    "tco2e": null
+  },
+  "commit": true,
+  "hostile_text": null,
+  "depends_on": null,
+  "cross_tenant_probe": false,
+  "checks": [],
+  "note": null
+}

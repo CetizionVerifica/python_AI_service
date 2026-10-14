@@ -1,0 +1,466 @@
+{
+  "case": "17-twenty-sheets",
+  "workbook": "17-twenty-sheets.xlsx",
+  "caller": "manager",
+  "site_id": 1,
+  "expect_status": 200,
+  "expect_error": null,
+  "max_model_calls": 20,
+  "min_profile_hits": 0,
+  "sheets": [
+    {
+      "sheet_name": "Fuel 01",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 02",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 03",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 04",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 05",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 06",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 07",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 08",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 09",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Fuel 10",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 11",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 12",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 13",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 14",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 15",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 16",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 17",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 18",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 19",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    },
+    {
+      "sheet_name": "Power 20",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 2,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "kWh",
+        "activity_unit": null,
+        "activity_name": "Source"
+      },
+      "activities": {
+        "Grid – TNEB": "Grid – TNEB"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    }
+  ],
+  "plan": {
+    "rows": 40,
+    "out_of_scope_rows": 0,
+    "issues": {
+      "DUPLICATE_IN_PLAN": "warning"
+    },
+    "tco2e": null
+  },
+  "commit": true,
+  "hostile_text": null,
+  "depends_on": null,
+  "cross_tenant_probe": false,
+  "checks": [],
+  "note": "Exactly the 20-sheet limit: all 20 sheets proposed, at most one model call each. Months repeat across sheets, so duplicate-in-plan warnings are expected, not errors."
+}

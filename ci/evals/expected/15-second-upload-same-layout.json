@@ -1,0 +1,48 @@
+{
+  "case": "15-second-upload-same-layout",
+  "workbook": "15-second-upload-same-layout.xlsx",
+  "caller": "manager",
+  "site_id": 1,
+  "expect_status": 200,
+  "expect_error": null,
+  "max_model_calls": 0,
+  "min_profile_hits": 1,
+  "sheets": [
+    {
+      "sheet_name": "Fuel 2026",
+      "layout": "rows",
+      "data_rows": 6,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Quantity",
+        "activity_unit": "Unit",
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    }
+  ],
+  "plan": {
+    "rows": 6,
+    "out_of_scope_rows": 0,
+    "issues": {},
+    "tco2e": null
+  },
+  "commit": true,
+  "hostile_text": null,
+  "depends_on": "01-single-site-monthly-fuel",
+  "cross_tenant_probe": false,
+  "checks": [
+    "source_profile"
+  ],
+  "note": "Same headers as 01 (different sheet name and row count → same fingerprint). After 01 committed, this proposal comes from the saved profile: model.calls 0, cached_profile_hits ≥ 1, source profile."
+}

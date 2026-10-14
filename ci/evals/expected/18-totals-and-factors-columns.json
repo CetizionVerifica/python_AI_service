@@ -1,0 +1,50 @@
+{
+  "case": "18-totals-and-factors-columns",
+  "workbook": "18-totals-and-factors-columns.xlsx",
+  "caller": "manager",
+  "site_id": 1,
+  "expect_status": 200,
+  "expect_error": null,
+  "max_model_calls": 1,
+  "min_profile_hits": 0,
+  "sheets": [
+    {
+      "sheet_name": "Fuel",
+      "layout": "rows",
+      "data_rows": 3,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": [
+        "Emission factor (kgCO2e/L)",
+        "tCO2e",
+        "Total cost"
+      ]
+    }
+  ],
+  "plan": {
+    "rows": 3,
+    "out_of_scope_rows": 0,
+    "issues": {},
+    "tco2e": 8877.0
+  },
+  "commit": true,
+  "hostile_text": null,
+  "depends_on": null,
+  "cross_tenant_probe": false,
+  "checks": [],
+  "note": "The sheet's own factor and tCO2e columns are wrong on purpose. ESG-lite's total must come from its factor (3,300 L × 2.69 = 8,877 tCO2e), proving the sheet's numbers were ignored."
+}

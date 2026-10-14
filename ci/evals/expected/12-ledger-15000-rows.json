@@ -1,0 +1,51 @@
+{
+  "case": "12-ledger-15000-rows",
+  "workbook": "12-ledger-15000-rows.xlsx",
+  "caller": "manager",
+  "site_id": 1,
+  "expect_status": 200,
+  "expect_error": null,
+  "max_model_calls": 1,
+  "min_profile_hits": 0,
+  "sheets": [
+    {
+      "sheet_name": "Ledger",
+      "layout": "rows",
+      "data_rows": 15000,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Date"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "Diesel": "Diesel"
+      },
+      "site_column": "Site",
+      "out_of_scope_values": [
+        "Plant B"
+      ],
+      "never_map_columns": []
+    }
+  ],
+  "plan": {
+    "rows": 15000,
+    "out_of_scope_rows": 7500,
+    "issues": {
+      "SITE_NOT_ALLOWED": 7500,
+      "DUPLICATE_IN_PLAN": "warning"
+    },
+    "tco2e": null
+  },
+  "commit": false,
+  "hostile_text": null,
+  "depends_on": null,
+  "cross_tenant_probe": false,
+  "checks": [],
+  "note": "Chunked planning (≥ 8 calls of ≤ 2,000 rows); the 7,500 Plant B rows are flagged. Run with --full; skipped by default."
+}
