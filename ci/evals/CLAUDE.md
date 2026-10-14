@@ -20,4 +20,4 @@ Thresholds met on the full set before XM-3; results recorded in `audit/results/`
 - `runner.py` (standard library only) drives upload → propose → preview → paged rows → cross-tenant twin → import on the audit stack with fixture tokens; `--setup` sets the client switches; results one JSON per case.
 - CI: `ci/tests/test_evals_set.py` (generator deterministic and in sync, expected files inside the fixture, scorer passes a perfect run and fails a flawed one, perfect proposals validate against `app.schemas.mapping` once XI0 2/2 is on the head).
 - Audit harness: `/mnt/project-files/audit/harness/xi-probes.cjs`, step `xi-probes` in `run-audit.sh`, rows XI-01..08 in `audit/e2e-workflow-audit.md` §13. Rows that need XI2/XI3/XI5 report `na` until those merge.
-- Not done here: the live eval run (needs XI2 on the head and the model key as a cloud-environment secret); results go to `audit/results/` and rows XI-02 / E2E-10.
+- Not done here: the live eval run (needs XI2 on the head and the model key as a cloud-environment secret); results go to `audit/results/` and rows XI-02 / E2E-11.

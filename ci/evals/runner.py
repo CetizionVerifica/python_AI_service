@@ -173,7 +173,7 @@ def run_case(stack: Stack, exp: dict, hostile_text: str | None) -> dict:
     code, body = http("POST", f"{stack.ai}/v1/excel/propose", stack.tok(caller), propose_body)
     result["status"]["propose"] = code
     result["error_code"] = error_code(body)
-    if code == 404 and not isinstance(body, dict):
+    if code == 404 and (not isinstance(body, dict) or error_code(body) in (None, "Not Found")):
         result["error"] = "POST /v1/excel/propose is not built on this head (XI2)"
         return result
     if code != 200:
