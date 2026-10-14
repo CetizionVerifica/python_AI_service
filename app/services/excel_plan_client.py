@@ -35,6 +35,14 @@ PAGE_SIZE_MAX = 200
 SKIPPED_ROWS_LIMIT = 1000
 
 CHANNEL = "bulk_upload"
+# ESG-lite's IMPORT_LIMITS (src/imports/limits.ts): longer text makes it refuse the whole request.
+TEXT_MAX_CHARS = 300
+FIELD_NAME_MAX_CHARS = 100
+
+
+def _js_len(text: str) -> int:
+    """The length zod sees: UTF-16 code units, so an emoji counts as two."""
+    return len(text.encode("utf-16-le")) // 2
 
 # Mapping keys with a fixed meaning; everything else mapped is a form field.
 KEY_CATEGORY = "emission_category"
@@ -251,6 +259,8 @@ def import_row_from_record(index: Any, record: dict, site_id: int, category_id: 
         if not text:
             continue
         name = key[len(EXTRA_PREFIX):] if str(key).startswith(EXTRA_PREFIX) else str(key)
+        if _js_len(name) > FIELD_NAME_MAX_CHARS or _js_len(text) > TEXT_MAX_CHARS:
+            return None, LocalIssue(row_number(row_ref) or 0, row_ref, category or None, "TEXT_TOO_LONG", f"The {name[:FIELD_NAME_MAX_CHARS]!r} cell is longer than {TEXT_MAX_CHARS} characters.", record)
         fields[name] = text
 
     activity_value: Optional[float] = None
@@ -265,6 +275,8 @@ def import_row_from_record(index: Any, record: dict, site_id: int, category_id: 
         return None, LocalIssue(row_number(row_ref) or 0, row_ref, None, "MISSING_CATEGORY", "Missing emission category.", record)
     if not unit:
         return None, LocalIssue(row_number(row_ref) or 0, row_ref, category, "MISSING_UNIT", "Missing activity unit.", record)
+    if _js_len(category) > TEXT_MAX_CHARS or _js_len(unit) > TEXT_MAX_CHARS:
+        return None, LocalIssue(row_number(row_ref) or 0, row_ref, category[:TEXT_MAX_CHARS], "TEXT_TOO_LONG", f"The category or unit cell is longer than {TEXT_MAX_CHARS} characters.", record)
     if activity_value is None and not fields:
         return None, LocalIssue(row_number(row_ref) or 0, row_ref, category, "MISSING_VALUE", "No activity value or form fields in this row.", record)
 

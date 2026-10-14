@@ -1,0 +1,16 @@
+{
+  "row_ref": "Fuel 2025!B14",
+  "site_id": 2,
+  "category_id": 3,
+  "period": {
+    "kind": "monthly",
+    "date": "2025-03-15"
+  },
+  "activity_name": "HSD",
+  "activity_value": 120.5,
+  "activity_unit": "L",
+  "meta": {
+    "source": "llm",
+    "confidence": 0.92
+  }
+}
