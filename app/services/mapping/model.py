@@ -124,11 +124,21 @@ class AnthropicMappingModel:
             raise ModelError("The mapping model refused the request.") from e
         except anthropic.APIConnectionError as e:
             raise ModelError("The mapping model could not be reached.") from e
+        except Exception as e:  # a truncated or unparsable answer (pydantic/JSON errors), or an SDK error not mapped above
+            logger.warning(f"mapping model {self.name} failed: {type(e).__name__}")
+            raise ModelError("The mapping model gave no usable answer.") from e
         usage = getattr(response, "usage", None)
         logger.info(f"mapping model {self.name} call: in={getattr(usage, 'input_tokens', '?')} out={getattr(usage, 'output_tokens', '?')} stop={response.stop_reason}")
-        if response.stop_reason == "refusal" or response.parsed_output is None:
+        if response.stop_reason in ("refusal", "max_tokens"):
             raise ModelError("The mapping model gave no answer for this sheet.")
-        return response.parsed_output
+        try:
+            parsed = response.parsed_output
+        except Exception as e:
+            logger.warning(f"mapping model {self.name} answer did not parse: {type(e).__name__}")
+            raise ModelError("The mapping model answered in an unexpected shape.") from e
+        if parsed is None:
+            raise ModelError("The mapping model gave no answer for this sheet.")
+        return parsed
 
 
 class OpenRouterMappingModel:
@@ -163,11 +173,13 @@ def _json(obj) -> str:
 
 
 _warned = False
+_cached: tuple[tuple, MappingModel] | None = None
 
 
 def configured_model() -> Optional[MappingModel]:
-    """The adapter ``MAPPING_MODEL_PROVIDER`` names, or None (rules only)."""
-    global _warned
+    """The adapter ``MAPPING_MODEL_PROVIDER`` names, or None (rules only).
+    One adapter (and one HTTP client) per process, rebuilt when the settings change."""
+    global _warned, _cached
     provider = (settings.MAPPING_MODEL_PROVIDER or "none").strip().lower()
     if provider == "anthropic":
         if not settings.ANTHROPIC_API_KEY:
@@ -175,7 +187,13 @@ def configured_model() -> Optional[MappingModel]:
                 logger.warning("MAPPING_MODEL_PROVIDER=anthropic but ANTHROPIC_API_KEY is empty: smart import runs on rules only")
                 _warned = True
             return None
-        return AnthropicMappingModel()
-    if provider == "openrouter":
-        return OpenRouterMappingModel()
-    return None
+        key = ("anthropic", settings.ANTHROPIC_API_KEY, settings.ANTHROPIC_MAPPING_MODEL, settings.MAPPING_MODEL_TIMEOUT_S)
+        factory = AnthropicMappingModel
+    elif provider == "openrouter":
+        key = ("openrouter", settings.OPENROUTER_MODEL, settings.MAPPING_MODEL_TIMEOUT_S)
+        factory = OpenRouterMappingModel
+    else:
+        return None
+    if _cached is None or _cached[0] != key:
+        _cached = (key, factory())
+    return _cached[1]

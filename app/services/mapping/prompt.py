@@ -8,6 +8,7 @@ instructions found in cells are to be ignored. Nothing outside the
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from app.schemas.mapping import MAPPING_PROMPT_TOKENS_PER_SHEET, MAPPING_SAMPLE_ROWS_PER_SHEET
 from app.services.mapping.context import ActivityLookup
@@ -77,6 +78,17 @@ def sheet_section(draft: Draft, sample_rows: int, samples_per_column: int = 5) -
     }
 
 
+def _clip_all(obj):
+    """Every string in a NEEDED or ALREADY_RESOLVED section, cut to ``CELL_MAX_CHARS``."""
+    if isinstance(obj, str):
+        return _cell(obj)
+    if isinstance(obj, list):
+        return [_clip_all(x) for x in obj]
+    if isinstance(obj, dict):
+        return {_cell(k) if isinstance(k, str) else k: _clip_all(v) for k, v in obj.items()}
+    return obj
+
+
 def resolved_section(draft: Draft) -> dict:
     out: dict = {}
     if draft.category and draft.category.resolved:
@@ -87,7 +99,7 @@ def resolved_section(draft: Draft) -> dict:
     out["activities"] = {t: p.value for t, p in draft.activities.items() if p.resolved}
     if draft.site_column:
         out["site_column"] = draft.site_column["column"]
-    return out
+    return _clip_all(out)
 
 
 def needed_parts(draft: Draft) -> dict:
@@ -108,16 +120,19 @@ def needed_parts(draft: Draft) -> dict:
     return needed
 
 
-def build_prompt(draft: Draft, activities: ActivityLookup) -> tuple[str, str]:
+def build_prompt(draft: Draft, activities: ActivityLookup) -> Optional[tuple[str, str]]:
     """``(system, user)`` within the per-sheet token budget: sample rows, then
-    column samples, then activity names are trimmed until it fits."""
-    needed = needed_parts(draft)
+    column samples, then activity names are trimmed until it fits. None when
+    even the smallest prompt is over budget: the sheet keeps the rules result
+    (a sliced prompt would be broken JSON with the NEEDED part cut off)."""
+    needed = _clip_all(needed_parts(draft))
+    resolved = resolved_section(draft)
     rows, per_col, names = MAPPING_SAMPLE_ROWS_PER_SHEET, 5, NAMES_PER_CATEGORY
     while True:
         body = {
             "CONTEXT": context_section(draft, activities, names),
             "SHEET": sheet_section(draft, rows, per_col),
-            "ALREADY_RESOLVED": resolved_section(draft),
+            "ALREADY_RESOLVED": resolved,
             "NEEDED": needed,
         }
         user = json.dumps(body, ensure_ascii=False, indent=1)
@@ -129,5 +144,7 @@ def build_prompt(draft: Draft, activities: ActivityLookup) -> tuple[str, str]:
             per_col = 2
         elif names > 10:
             names = max(10, names // 2)
+        elif rows > 0 or per_col > 0:
+            rows, per_col = 0, 0
         else:
-            return SYSTEM_PROMPT, user[:PROMPT_CHAR_BUDGET]
+            return None

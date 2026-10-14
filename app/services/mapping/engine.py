@@ -29,11 +29,22 @@ def propose(workbook: Workbook, document_id: int, ctx: ContextView, profiles: li
         if profile_layer(draft, profiles, activities):
             profile_hits += 1
         rules_layer(draft, activities)
-        if model is not None:
-            from app.services.mapping.llm import llm_layer
+        if model is None:
+            sheets.append(draft.to_proposal())
+            continue
+        from app.schemas.mapping import SheetProposal
+        from app.services.mapping.llm import llm_layer
 
+        rules_only = draft.to_proposal()
+        try:
             calls += llm_layer(draft, activities, model)
-        sheets.append(draft.to_proposal())
+            sheet_proposal = draft.to_proposal()
+            SheetProposal.model_validate(sheet_proposal)
+        except Exception as e:  # a model answer the contract refuses: this sheet keeps the profile and rules result
+            logger.warning(f"propose document={document_id} sheet={sheet.index}: model answer dropped ({type(e).__name__})")
+            calls = max(calls, 1)
+            sheet_proposal = rules_only
+        sheets.append(sheet_proposal)
     telemetry = {"name": str(getattr(model, "name", "none"))[:100] if model is not None else "none", "calls": calls, "cached_profile_hits": profile_hits}
     proposal = MappingProposal.model_validate({"document_id": int(document_id), "site_id": ctx.site_id, "sheets": sheets, "model": telemetry})
     logger.info(f"propose document={document_id} site={ctx.site_id} sheets={len(sheets)} profile_hits={profile_hits} model_calls={calls}")
