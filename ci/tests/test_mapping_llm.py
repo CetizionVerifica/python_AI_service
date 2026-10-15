@@ -129,16 +129,90 @@ def test_configured_model_picks_openrouter(monkeypatch):
     assert isinstance(configured_model(), model_mod.OpenRouterMappingModel)
 
 
+def test_auto_provider_prefers_openrouter_then_anthropic_then_rules(monkeypatch):
+    monkeypatch.setattr(model_mod.settings, "MAPPING_MODEL_PROVIDER", "auto")
+    monkeypatch.setattr(model_mod.settings, "OPENROUTER_API_KEY", "or-test")
+    monkeypatch.setattr(model_mod.settings, "ANTHROPIC_API_KEY", "sk-test-not-real")
+    m = configured_model()
+    assert isinstance(m, model_mod.OpenRouterMappingModel) and m.name == model_mod.settings.OPENROUTER_MAPPING_MODEL
+    monkeypatch.setattr(model_mod.settings, "OPENROUTER_API_KEY", "")
+    assert isinstance(configured_model(), model_mod.AnthropicMappingModel)
+    monkeypatch.setattr(model_mod.settings, "ANTHROPIC_API_KEY", "")
+    assert configured_model() is None
+
+
+def test_openrouter_without_a_key_is_rules_only(monkeypatch):
+    monkeypatch.setattr(model_mod.settings, "MAPPING_MODEL_PROVIDER", "openrouter")
+    monkeypatch.setattr(model_mod.settings, "OPENROUTER_API_KEY", "")
+    assert configured_model() is None
+
+
+def test_openrouter_mapping_model_is_its_own_setting_not_the_ocr_model(monkeypatch):
+    monkeypatch.setattr(model_mod.settings, "MAPPING_MODEL_PROVIDER", "openrouter")
+    monkeypatch.setattr(model_mod.settings, "OPENROUTER_MAPPING_MODEL", "vendor/strong-model")
+    assert configured_model().name == "vendor/strong-model" != model_mod.settings.OPENROUTER_MODEL
+
+
+def test_openrouter_adapter_asks_for_the_answer_schema_on_its_model(monkeypatch):
+    from app.services import llm
+
+    seen = {}
+
+    def fake(messages, budget, **options):
+        seen.update(options)
+        return '{"category": {"kind": "fixed", "category_id": 3, "confidence": 0.7}}'
+
+    monkeypatch.setattr(llm, "call_openrouter_within", fake)
+    model_mod.OpenRouterMappingModel(model="vendor/strong-model").propose("s", "u")
+    assert seen["model"] == "vendor/strong-model"
+    fmt = seen["response_format"]
+    assert fmt["type"] == "json_schema" and fmt["json_schema"]["schema"] == model_mod.answer_schema()
+    assert seen["extra_body"] == {"provider": {"require_parameters": True}}
+
+
+def test_answer_schema_is_closed_and_has_no_titles_or_defaults():
+    import json
+
+    schema = model_mod.answer_schema()
+    text = json.dumps(schema)
+    assert '"title"' not in text and '"default"' not in text
+
+    def objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                yield node
+            for v in node.values():
+                yield from objects(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from objects(v)
+
+    found = list(objects(schema))
+    assert found and all(o["additionalProperties"] is False for o in found)
+    assert set(schema["properties"]) == set(ModelAnswer.model_fields)
+
+
+def test_a_cut_off_openrouter_answer_is_a_model_error(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import llm
+
+    response = SimpleNamespace(choices=[SimpleNamespace(finish_reason="length", message=SimpleNamespace(content='{"categ'))], usage=None)
+    monkeypatch.setattr(llm.client.chat.completions, "create", lambda **kwargs: response)
+    with pytest.raises(ModelError):
+        model_mod.OpenRouterMappingModel(model="vendor/strong-model", budget_s=5).propose("s", "u")
+
+
 def test_openrouter_adapter_parses_json_and_refuses_bad_shapes(monkeypatch):
     from app.services import llm
 
-    monkeypatch.setattr(llm, "call_openrouter_within", lambda messages, budget: '```json\n{"category": {"kind": "fixed", "category_id": 3, "confidence": 0.7}}\n```')
+    monkeypatch.setattr(llm, "call_openrouter_within", lambda messages, budget, **options: '```json\n{"category": {"kind": "fixed", "category_id": 3, "confidence": 0.7}}\n```')
     answer = model_mod.OpenRouterMappingModel(model="test").propose("s", "u")
     assert answer.category.category_id == 3
-    monkeypatch.setattr(llm, "call_openrouter_within", lambda messages, budget: '{"category": {"kind": "weird"}}')
+    monkeypatch.setattr(llm, "call_openrouter_within", lambda messages, budget, **options: '{"category": {"kind": "weird"}}')
     with pytest.raises(ModelError):
         model_mod.OpenRouterMappingModel(model="test").propose("s", "u")
-    monkeypatch.setattr(llm, "call_openrouter_within", lambda messages, budget: (_ for _ in ()).throw(llm.LLMError("busy")))
+    monkeypatch.setattr(llm, "call_openrouter_within", lambda messages, budget, **options: (_ for _ in ()).throw(llm.LLMError("busy")))
     with pytest.raises(ModelError):
         model_mod.OpenRouterMappingModel(model="test").propose("s", "u")
 

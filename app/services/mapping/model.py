@@ -7,8 +7,10 @@ counts and token usage, never prompt text or cell text.
 
 ``AnthropicMappingModel``: Claude through the Anthropic SDK with structured
 output (decision 2). ``OpenRouterMappingModel``: the service's existing
-OpenRouter client (``llm.py``), JSON mode. ``configured_model()`` picks one
-from ``MAPPING_MODEL_PROVIDER``; with no usable key the engine is rules only.
+OpenRouter client (``llm.py``) with ``OPENROUTER_MAPPING_MODEL`` and a JSON
+schema ``response_format``. ``configured_model()`` picks one from
+``MAPPING_MODEL_PROVIDER`` ("auto" prefers OpenRouter when its key is set);
+with no usable key the engine is rules only.
 """
 from __future__ import annotations
 
@@ -156,21 +158,31 @@ class AnthropicMappingModel:
 
 
 class OpenRouterMappingModel:
-    """The existing OpenRouter client (OCR extraction) in JSON mode."""
+    """Any OpenRouter model (``OPENROUTER_MAPPING_MODEL``) with structured
+    output: the ``ModelAnswer`` JSON schema goes in ``response_format`` and
+    OpenRouter routes only to providers that honour it. The schema is also in
+    the system prompt, and the answer is validated again here."""
 
     def __init__(self, model: Optional[str] = None, budget_s: Optional[float] = None):
-        self.name = model or settings.OPENROUTER_MODEL
+        self.name = model or settings.OPENROUTER_MAPPING_MODEL
         self._budget = budget_s or settings.MAPPING_MODEL_TIMEOUT_S
 
     def propose(self, system: str, user: str) -> ModelAnswer:
         from app.services import llm
 
-        schema = ModelAnswer.model_json_schema()
+        schema = answer_schema()
         messages = [{"role": "system", "content": system + "\n\nAnswer with one JSON object matching this schema:\n" + _json(schema)}, {"role": "user", "content": user}]
         try:
-            text = llm.call_openrouter_within(messages, self._budget)
+            text = llm.call_openrouter_within(
+                messages,
+                self._budget,
+                model=self.name,
+                response_format={"type": "json_schema", "json_schema": {"name": "mapping_answer", "strict": False, "schema": schema}},
+                max_tokens=8000,
+                extra_body={"provider": {"require_parameters": True}},
+            )
             data = llm._parse_json_object(text)
-        except Exception as e:  # LLMError, JSON errors, SDK errors
+        except Exception as e:  # LLMError (busy, cut off), JSON errors, SDK errors
             logger.warning(f"mapping model {self.name} failed: {type(e).__name__}")
             raise ModelError("The mapping model gave no usable answer.") from e
         logger.info(f"mapping model {self.name} call: answer={len(text)} chars")
@@ -178,6 +190,25 @@ class OpenRouterMappingModel:
             return ModelAnswer.model_validate(data)
         except ValidationError as e:
             raise ModelError("The mapping model answered in an unexpected shape.") from e
+
+
+def answer_schema() -> dict:
+    """``ModelAnswer``'s JSON schema in the form structured-output providers
+    accept: no titles or defaults, and no keys beyond the listed ones."""
+
+    def clean(node, names=False):
+        if isinstance(node, dict):
+            if names:  # a "properties" map: its keys are field names, not schema words
+                return {k: clean(v) for k, v in node.items()}
+            out = {k: clean(v, k == "properties") for k, v in node.items() if k not in ("title", "default")}
+            if out.get("type") == "object" and "properties" in out:
+                out["additionalProperties"] = False
+            return out
+        if isinstance(node, list):
+            return [clean(v) for v in node]
+        return node
+
+    return clean(ModelAnswer.model_json_schema())
 
 
 def _json(obj) -> str:
@@ -195,6 +226,8 @@ def configured_model() -> Optional[MappingModel]:
     One adapter (and one HTTP client) per process, rebuilt when the settings change."""
     global _warned, _cached
     provider = (settings.MAPPING_MODEL_PROVIDER or "none").strip().lower()
+    if provider == "auto":
+        provider = "openrouter" if settings.OPENROUTER_API_KEY else "anthropic" if settings.ANTHROPIC_API_KEY else "none"
     if provider == "anthropic":
         if not settings.ANTHROPIC_API_KEY:
             if not _warned:
@@ -204,7 +237,12 @@ def configured_model() -> Optional[MappingModel]:
         key = ("anthropic", settings.ANTHROPIC_API_KEY, settings.ANTHROPIC_MAPPING_MODEL, settings.MAPPING_MODEL_TIMEOUT_S)
         factory = AnthropicMappingModel
     elif provider == "openrouter":
-        key = ("openrouter", settings.OPENROUTER_MODEL, settings.MAPPING_MODEL_TIMEOUT_S)
+        if not settings.OPENROUTER_API_KEY:
+            if not _warned:
+                logger.warning("MAPPING_MODEL_PROVIDER=openrouter but OPENROUTER_API_KEY is empty: smart import runs on rules only")
+                _warned = True
+            return None
+        key = ("openrouter", settings.OPENROUTER_MAPPING_MODEL, settings.MAPPING_MODEL_TIMEOUT_S)
         factory = OpenRouterMappingModel
     else:
         return None
