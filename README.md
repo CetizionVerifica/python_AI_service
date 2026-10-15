@@ -35,6 +35,8 @@ Server runs on `http://localhost:8000` by default.
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Cloudinary file storage |
 | `OPENROUTER_API_KEY` | OpenRouter API key for LLM |
 | `OPENROUTER_MODEL` | LLM model (default: `google/gemini-3-flash-preview`) |
+| `MAPPING_MODEL_PROVIDER` | Smart import mapping model: `auto` (default: OpenRouter when `OPENROUTER_API_KEY` is set, else Anthropic when `ANTHROPIC_API_KEY` is set, else rules only), `openrouter`, `anthropic` or `none` |
+| `OPENROUTER_MAPPING_MODEL` | OpenRouter model for smart import mapping (default: `anthropic/claude-opus-5.5`); any model with structured outputs |
 | `LLM_TIMEOUT_S`, `MAX_RETRIES`, `MAX_CONCURRENT_LLM` | Per-call LLM timeout in seconds (default 90), retries after a failed call (default 2), LLM calls in flight per process (default 3) |
 | `AUTH_JWT_SECRET` | **Required.** Must equal ESG-lite's `JWT_SECRET`; verifies the sign-in token browsers send. The service does not start without it |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the service (default `http://localhost:5173,http://localhost:3000`). Set it to the deployed frontend's origin |
