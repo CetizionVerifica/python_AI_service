@@ -8,3 +8,6 @@
 
 ## Imports — see ESG-lite docs/mcp-import/
 - Bulk import rows go to ESG-lite `POST /imports/plans` with the caller's token. This service reads and maps sheets; it doesn't calculate or insert emission rows.
+
+## Scope 3 — see ESG-lite docs/scope3/
+- `app/scope3/` and the factor sheet parser read and map data only: they keep WTT and per-gas columns as separate factor types and may suggest an EEIO sector or a GHG category with a confidence. They never calculate totals or choose the method for a row.
