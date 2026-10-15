@@ -602,6 +602,15 @@ def quantity_fields(draft: Draft) -> None:
     value = draft.fields.get(VALUE_KEY)
     period = draft.period.value if draft.period is not None and isinstance(draft.period.value, dict) else {}
     pivot = draft.sheet.layout == "months_as_columns" or period.get("kind") == "months_as_columns"
+    if not pivot and (value is None or value.value is None or value.confidence < 0.8):
+        # The other way round: the form's quantity field found its column by name
+        # ("Consumption" → "Total Consumption") but the quantity itself has none,
+        # or only a guess (an "S.No" column). It is the same figure, so the
+        # quantity takes that column.
+        named = _quantity_field_column(draft)
+        if named is not None and (value is None or value.value is None or named.confidence > value.confidence):
+            draft.fields[VALUE_KEY] = Part(named.value, named.confidence, named.source)
+            value = draft.fields[VALUE_KEY]
     if not pivot and (value is None or value.value is None):
         return
     for c in _categories_in_play(draft):
@@ -616,6 +625,23 @@ def quantity_fields(draft: Draft) -> None:
                 draft.cell_quantity.add(f.key)
             elif current is None or current.value is None:
                 draft.fields[f.key] = Part(value.value, value.confidence, value.source)
+
+
+def _quantity_field_column(draft: Draft) -> Optional[Part]:
+    """The column of the form's one required number field, when it was matched
+    with confidence (>= 0.8) on a form without a calculation spec; else None.
+    Two such fields would be ambiguous, so they give None."""
+    found: list[Part] = []
+    for c in _categories_in_play(draft):
+        if c.calc_mode not in (None, "single"):
+            continue
+        for f in c.fields:
+            if not f.required or f.type != "number" or f.key not in draft.field_specs:
+                continue
+            part = draft.fields.get(f.key)
+            if part is not None and part.value is not None and part.confidence >= 0.8 and all(p.value != part.value for p in found):
+                found.append(part)
+    return found[0] if len(found) == 1 else None
 
 
 def _form_field_rules(draft: Draft, free: list[Column], taken: set[str], claim) -> None:

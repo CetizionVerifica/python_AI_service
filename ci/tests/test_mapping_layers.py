@@ -316,6 +316,57 @@ def test_the_quantity_rule_leaves_an_own_column_and_spec_forms_alone(tmp_path):
     assert fields(s)["Fuel consumption"] is None
 
 
+def _consumption_ctx():
+    """Category 3 with Midal's form: one required number field "Consumption", no calculation spec."""
+    from app.services.mapping.context import context_view
+    from ci.tests.mapping_fixtures import CONTEXT
+    raw = copy.deepcopy(CONTEXT)
+    cat = next(c for s in raw["sites"] if s["site_id"] == 2 for c in s["categories"] if c["category_id"] == 3)
+    cat["form"] = {"calc_mode": None, "fields": [{"key": "Fuel Type", "label": "Fuel Type", "type": "select", "required": False}, {"key": "Consumption", "label": "Consumption", "type": "number", "required": True}]}
+    return context_view(raw, 2)
+
+
+def test_the_quantity_takes_the_forms_named_consumption_column_not_a_serial_number(tmp_path):
+    """Midal's Scope 1 template: S.No and Total Consumption are both numbers. The form's
+    "Consumption" field finds "Total Consumption" by name; the quantity is that column too."""
+    from openpyxl import Workbook
+    import datetime as dt
+    wb = Workbook(); ws = wb.active; ws.title = "Scope-1 Stationary Combustion"
+    ws.append(["S.No", "Month/Period", "Source of Combustion", "Consumption Unit(Kg/MT/L)", "Total Consumption"])
+    for i, (m, qty) in enumerate(((1, 1200), (2, 600), (3, 450)), start=1):
+        ws.append([i, dt.date(2025, m, 1), "HSD", "L", qty])
+    p = tmp_path / "scope1.xlsx"; wb.save(p)
+    book = read_workbook(p)
+    s = propose(book, 1, _consumption_ctx(), [], lookup(), sheet_categories={"Scope-1 Stationary Combustion": 3}).sheets[0]
+    value = next(f for f in s.fields if f.key == "activity_value")
+    assert fields(s)["Consumption"] == "Total Consumption"
+    assert value.column == "Total Consumption" and value.confidence >= 0.8
+    rows = rows_from_proposal_for(book, s)
+    assert [r["activity_value"] for r in rows] == [1200, 600, 450]
+
+
+def test_a_low_confidence_quantity_guess_gives_way_to_the_named_field(tmp_path):
+    from app.services.mapping.layers import Draft, Part, quantity_fields, rules_layer
+    from app.services.mapping.context import VALUE_KEY
+    from openpyxl import Workbook
+    wb = Workbook(); ws = wb.active; ws.title = "Fuel"
+    ws.append(["S.No", "Month", "Unit", "Total Consumption"])
+    for i, m in enumerate(("Jan-25", "Feb-25", "Mar-25"), start=1):
+        ws.append([i, m, "L", 100 * i])
+    p = tmp_path / "f.xlsx"; wb.save(p)
+    sheet = read_workbook(p).readable_sheets[0]
+    d = Draft(sheet=sheet, ctx=_consumption_ctx())
+    rules_layer(d, lookup())
+    # what the model layer did on Shyam's file: a guess at S.No under 0.8
+    d.fields[VALUE_KEY] = Part("S.No", 0.6, "llm")
+    quantity_fields(d)
+    assert d.fields[VALUE_KEY].value == "Total Consumption"
+    # a confident quantity is never replaced
+    d.fields[VALUE_KEY] = Part("S.No", 0.9, "llm")
+    quantity_fields(d)
+    assert d.fields[VALUE_KEY].value == "S.No"
+
+
 # ---------------------------------------------------------------------------
 # Review findings (2026-10-14)
 # ---------------------------------------------------------------------------
