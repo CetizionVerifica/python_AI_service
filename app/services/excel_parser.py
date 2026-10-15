@@ -2,6 +2,7 @@ import io
 import logging
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
 
@@ -148,8 +149,9 @@ deterministically extract all data rows. Analyze the header rows to determine:
    - "simple": One factor value per year per row.
      Each year has exactly 1 value column.
    - "sub_columns": Multiple sub-columns per year (e.g. Direct, WTT, Total).
-     Each year repeats the same set of sub-columns. The program will pick one
-     sub-column (typically "Total") as the factor value.
+     Each year repeats the same set of sub-columns. List EVERY sub-column of the
+     year, including WTT and per-gas columns (kg CO2, kg CH4, kg N2O); the
+     program keeps each one. Name the main one (typically "Total") as primary.
    - "disposal_pivot": Multiple disposal/treatment method columns per year
      (e.g. Re-use, Open loop, Closed loop, Combustion, Composting, Landfilled,
      Anaerobically digested). Each disposal column × each data row = a separate
@@ -281,33 +283,101 @@ def _parse_numeric(value, precision: int = 6) -> Optional[float]:
         return None
 
 
-# emission_factors.factor_value is numeric(10,4): four decimal places are all
-# the database keeps. Factors are rounded to that here, so what the review
-# screen shows is exactly what gets stored, and a factor that loses digits is
-# flagged instead of silently truncated.
-FACTOR_DECIMALS = 4
+# ESG-lite stores factor_value as numeric(18,8) (S3-2), so a factor keeps its
+# own precision here and travels as an exact decimal string. A float cell is
+# read at 12 significant digits, which drops Excel's formula noise
+# (0.7499399999999999 → 0.74994) and nothing a sheet actually prints.
+_NOT_A_NUMBER = {"", "-", "N/A", "n/a", "NA", "na", "#N/A", "#REF!", "#VALUE!"}
 
 
-def _parse_factor(value, row_num: int, name: str, warnings: list[str]) -> Optional[float]:
-    parsed = _parse_numeric(value)
-    if parsed is None:
+def _factor_text(value) -> Optional[str]:
+    """A factor cell as a plain decimal string (no exponent), or None."""
+    if value is None or isinstance(value, bool):
         return None
-    stored = round(parsed, FACTOR_DECIMALS)
-    if abs(stored - parsed) > 1e-9:
-        warnings.append(
-            f"Row {row_num}: factor {parsed:g} for '{name}' is stored as {stored:.{FACTOR_DECIMALS}f} "
-            f"(the database keeps {FACTOR_DECIMALS} decimal places)"
-        )
-    return stored
+    try:
+        if isinstance(value, (int, float)):
+            d = Decimal(format(float(value), ".12g"))
+        else:
+            s = str(value).strip()
+            if s in _NOT_A_NUMBER:
+                return None
+            d = Decimal(s)
+    except (InvalidOperation, ValueError):
+        return None
+    if not d.is_finite():
+        return None
+    text = format(d, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
+
+
+# ---------------------------------------------------------------------------
+# Sub-columns → factor type (layer rule 2, S3-2). Read from the sheet's own
+# labels only; ESG-lite validates the type and a person confirms it.
+# ---------------------------------------------------------------------------
+
+_WTT_LABEL = re.compile(r"\bwtt\b|well[\s-]*to[\s-]*tank|upstream", re.IGNORECASE)
+_LIFE_CYCLE_LABEL = re.compile(
+    r"life[\s-]*cycle|\bwtw\b|well[\s-]*to[\s-]*wheel", re.IGNORECASE
+)
+_TOTAL_LABEL = re.compile(r"\btotal\b", re.IGNORECASE)
+_BIOGENIC_LABEL = re.compile(r"biogenic|outside\s+(of\s+)?(the\s+)?scopes", re.IGNORECASE)
+_GAS_LABELS = [
+    ("ch4_kg", re.compile(r"\bch\s*4\b|ch₄|methane", re.IGNORECASE)),
+    ("n2o_kg", re.compile(r"\bn\s*2\s*o\b|n₂o|nitrous", re.IGNORECASE)),
+    # "kg CO2" is the CO2 part; "kg CO2e" / "CO2 equivalent" is a total.
+    ("co2_kg", re.compile(r"\bco\s*2\b(?!\s*-?\s*e(\b|q))|co₂(?!\s*e)", re.IGNORECASE)),
+]
+
+
+def _gas_part(name: str) -> Optional[str]:
+    """The gas-part field a sub-column fills, or None when it is a factor of its own."""
+    if _BIOGENIC_LABEL.search(name):
+        return "biogenic_co2_kg"
+    for field, pattern in _GAS_LABELS:
+        if pattern.search(name):
+            return field
+    return None
+
+
+def _sub_column_type(name: str, sheet_label: str, has_wtt_sibling: bool) -> tuple[str, bool]:
+    """(factor_type, includes_wtt) for a sub-column that is a factor of its own.
+
+    WTT → wtt. A Total next to a WTT sub-column sums it in: life_cycle with
+    includes_wtt (S3-7 flags it, D6). Otherwise combustion, or life_cycle when
+    the sub-column or the sheet itself says life cycle / well-to-wheel.
+    """
+    if _WTT_LABEL.search(name):
+        return "wtt", False
+    if has_wtt_sibling and _TOTAL_LABEL.search(name):
+        return "life_cycle", True
+    if _LIFE_CYCLE_LABEL.search(name) or _LIFE_CYCLE_LABEL.search(sheet_label):
+        return "life_cycle", False
+    return "combustion", False
+
+
+def _simple_type(sheet_label: str) -> Optional[str]:
+    """A one-value sheet only says its type when its own title does (e.g. "WTT- fuels")."""
+    if _WTT_LABEL.search(sheet_label):
+        return "wtt"
+    if _LIFE_CYCLE_LABEL.search(sheet_label):
+        return "life_cycle"
+    return None
 
 
 def _extract_factors(
-    ws, schema: SpreadsheetSchema
+    ws, schema: SpreadsheetSchema, sheet_label: Optional[str] = None
 ) -> tuple[list[EmissionFactorRecord], list[str]]:
     """
     Pass 2: Use detected schema to programmatically read all data rows.
     No LLM involved — purely deterministic openpyxl reads.
+
+    ``sheet_label`` (default: the worksheet title) is the sheet's own name,
+    read for its factor type ("WTT- fuels", "... life cycle").
     """
+    if sheet_label is None:
+        sheet_label = getattr(ws, "title", "") or ""
     factors: list[EmissionFactorRecord] = []
     warnings: list[str] = []
 
@@ -400,42 +470,69 @@ def _extract_factors(
             if schema.layout_type == "simple":
                 if year_map.value_column is None:
                     continue
-                value = cells.get(year_map.value_column)
-                factor = _parse_factor(value, row_num, emission_category_name, warnings)
-                if factor is not None:
+                text = _factor_text(cells.get(year_map.value_column))
+                if text is not None:
                     row_has_data = True
                     factors.append(
                         EmissionFactorRecord(
                             year=year_map.year,
-                            factor_value=factor,
+                            factor_value=float(text),
+                            factor_value_text=text,
                             denominator_unit=denominator_unit,
                             source=source,
                             emission_category_name=emission_category_name,
                             parent_category=current_parent,
+                            factor_type=_simple_type(sheet_label),
                         )
                     )
 
             elif schema.layout_type == "sub_columns":
-                # Find the primary sub-column (e.g., "Total")
-                total_col: Optional[int] = None
-                for sc in year_map.sub_columns or []:
-                    if sc.name == year_map.primary_sub_column:
-                        total_col = sc.column_index
-                        break
-                if total_col is None:
-                    continue
-                value = cells.get(total_col)
-                factor = _parse_factor(value, row_num, emission_category_name, warnings)
-                if factor is not None:
+                # One candidate per sub-column (S3-2): Total, Direct, WTT ...
+                # each with its factor type. Gas columns (kg CO2, CH4, N2O,
+                # biogenic) are parts of a factor, not factors of their own.
+                subs = year_map.sub_columns or []
+                factor_subs = [sc for sc in subs if _gas_part(sc.name) is None]
+                gas_subs = [sc for sc in subs if _gas_part(sc.name) is not None]
+                has_wtt = any(_WTT_LABEL.search(sc.name) for sc in factor_subs)
+                # Gas parts describe the direct factor: "Direct" when the
+                # sheet has one, else the primary sub-column.
+                gas_owner = next(
+                    (sc.name for sc in factor_subs if re.search(r"\bdirect\b", sc.name, re.IGNORECASE)),
+                    year_map.primary_sub_column,
+                )
+                gases: dict[str, str] = {}
+                for sc in gas_subs:
+                    text = _factor_text(cells.get(sc.column_index))
+                    if text is not None:
+                        gases[_gas_part(sc.name)] = text
+                for sc in factor_subs:
+                    text = _factor_text(cells.get(sc.column_index))
+                    if text is None:
+                        continue
+                    is_primary = sc.name == year_map.primary_sub_column
+                    # The primary keeps the plain name, as older imports
+                    # stored it; the others name their sub-column.
+                    name = (
+                        emission_category_name
+                        if is_primary
+                        else f"{emission_category_name}{schema.descriptor_join_separator}{sc.name}"
+                    )
+                    factor_type, includes_wtt = _sub_column_type(sc.name, sheet_label, has_wtt)
                     row_has_data = True
                     factors.append(
                         EmissionFactorRecord(
                             year=year_map.year,
-                            factor_value=factor,
+                            factor_value=float(text),
+                            factor_value_text=text,
                             denominator_unit=denominator_unit,
                             source=source,
-                            emission_category_name=emission_category_name,
+                            emission_category_name=name,
                             parent_category=current_parent,
+                            factor_type=factor_type,
+                            sub_column=sc.name,
+                            primary=is_primary,
+                            includes_wtt=includes_wtt,
+                            **(gases if sc.name == gas_owner else {}),
                         )
                     )
 
@@ -448,13 +545,14 @@ def _extract_factors(
                         f"{schema.descriptor_join_separator}"
                         f"{disp_col.name}"
                     )
-                    factor = _parse_factor(value, row_num, pivot_name, warnings)
-                    if factor is not None:
+                    text = _factor_text(value)
+                    if text is not None:
                         row_has_data = True
                         factors.append(
                             EmissionFactorRecord(
                                 year=year_map.year,
-                                factor_value=factor,
+                                factor_value=float(text),
+                                factor_value_text=text,
                                 denominator_unit=denominator_unit,
                                 source=source,
                                 emission_category_name=pivot_name,

@@ -9,3 +9,9 @@
 4. **Category hint (`category_matcher.py`):** may return `ghg_category` with a confidence when mapping a parent category name. ESG-lite treats it as a proposal (`category_ghg_map_proposal`), never as the stored value.
 5. **Models:** the existing OpenRouter mapping provider (`OPENROUTER_MAPPING_MODEL`). No new provider and no new key.
 6. **Logs:** ids and counts only, never cell text.
+
+## As built: S3-2 factor sheets (2026-10-15)
+- `excel_parser._extract_factors` returns one `EmissionFactorRecord` per sub-column (Total, Direct, WTT…). The schema's primary sub-column keeps the plain name and `primary: true`; the others are named `<name> - <sub-column>`, so older imports that only read the primary keep their names.
+- `factor_type` from the sheet's own labels: WTT → `wtt`; a Total next to a WTT sub-column → `life_cycle` with `includes_wtt: true` (D6, S3-7 flags it); life cycle / WTW in the sub-column or sheet title → `life_cycle`; otherwise `combustion`. A one-value sheet only gets a type when its title says WTT or life cycle (else null).
+- Gas columns (`kg CO2`, `kg CH4`, `kg N2O`, biogenic / "Outside of scopes") are parts (`co2_kg`, `ch4_kg`, `n2o_kg`, `biogenic_co2_kg`) of the Direct candidate, or of the primary when there is no Direct column. "kg CO2e" is a factor, not a gas part.
+- `factor_value_text` is the exact factor as a plain decimal string (float cells read at 12 significant digits to drop Excel noise). `factor_value` stays a float for older readers. The 4-dp rounding and its warning are gone: merge after ESG-lite's S3-2 part widens `factor_value` to numeric(18,8).

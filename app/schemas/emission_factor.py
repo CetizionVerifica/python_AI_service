@@ -35,11 +35,24 @@ class SpreadsheetSchema(BaseModel):
 
 class EmissionFactorRecord(BaseModel):
     year: int
+    # A float for older readers; ``factor_value_text`` is the exact figure
+    # (full precision, plain decimal) that ESG-lite should store (S3-2).
     factor_value: float
+    factor_value_text: Optional[str] = None
     denominator_unit: Optional[str] = None
     source: Optional[str] = None
     emission_category_name: Optional[str] = None
     parent_category: Optional[str] = None
+    # S3-2 factor metadata, read from the sheet's own labels. ESG-lite
+    # validates them; a person confirms them in the import preview.
+    factor_type: Optional[str] = None  # FactorType of ESG-lite src/scope3/contracts/factor.ts
+    sub_column: Optional[str] = None  # the sub-column this candidate came from ("Total", "WTT")
+    primary: bool = True  # the sub-column the sheet's schema names as the factor (older imports took only this one)
+    includes_wtt: bool = False  # a total that sums in a WTT sub-column of the same sheet
+    co2_kg: Optional[str] = None
+    ch4_kg: Optional[str] = None
+    n2o_kg: Optional[str] = None
+    biogenic_co2_kg: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
