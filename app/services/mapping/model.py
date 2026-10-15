@@ -180,6 +180,9 @@ class OpenRouterMappingModel:
                 response_format={"type": "json_schema", "json_schema": {"name": "mapping_answer", "strict": False, "schema": schema}},
                 max_tokens=8000,
                 extra_body={"provider": {"require_parameters": True}},
+                # No temperature: Opus 5.5's endpoints don't take one, and with
+                # require_parameters OpenRouter would route to none of them.
+                temperature=None,
             )
             data = llm._parse_json_object(text)
         except Exception as e:  # LLMError (busy, cut off), JSON errors, SDK errors

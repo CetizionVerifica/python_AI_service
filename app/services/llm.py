@@ -293,10 +293,14 @@ def _attempt(
     response_format: dict | None = None,
     max_tokens: int = 13333,
     extra_body: dict | None = None,
+    temperature: float | None = 0.1,
 ) -> str:
     """One OpenRouter call. With a deadline (time.monotonic()), the request gets
     whatever time is left after waiting for a slot; otherwise LLM_TIMEOUT_S.
-    ``model``/``response_format`` default to the OCR model in JSON mode."""
+    ``model``/``response_format`` default to the OCR model in JSON mode.
+    ``temperature=None`` leaves it out of the request: some models (Claude
+    Opus 5.5) accept none, and with ``require_parameters`` OpenRouter then
+    finds no endpoint at all (404)."""
     if not _llm_slots.acquire(timeout=slot_wait_s):
         logger.warning("OpenRouter call skipped: all LLM slots busy")
         raise LLMError("The AI service is busy. Please try again shortly.")
@@ -304,14 +308,15 @@ def _attempt(
         timeout_s = settings.LLM_TIMEOUT_S if deadline is None else deadline - time.monotonic()
         if timeout_s <= 0.1:
             raise LLMError("The AI service is busy. Please try again shortly.")
+        sampling = {} if temperature is None else {"temperature": temperature}
         response = client.chat.completions.create(
             model=model or MODEL_NAME,
             messages=messages,
             response_format=response_format or {"type": "json_object"},
-            temperature=0.1,
             max_tokens=max_tokens,
             timeout=timeout_s,
             extra_body=extra_body,
+            **sampling,
         )
         choice = response.choices[0]
         if model:
@@ -347,7 +352,7 @@ def call_openrouter_within(messages: list[dict], budget_s: float, **options) -> 
     One OpenRouter call that finishes, slot wait included, within budget_s,
     for callers that give up after a fixed time. No retries: the caller's own
     retry (a new request) gets a fresh budget. ``options`` go to ``_attempt``
-    (model, response_format, max_tokens, extra_body).
+    (model, response_format, max_tokens, extra_body, temperature).
     """
     return _attempt(messages, budget_s, time.monotonic() + budget_s, **options)
 

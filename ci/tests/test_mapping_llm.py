@@ -168,6 +168,27 @@ def test_openrouter_adapter_asks_for_the_answer_schema_on_its_model(monkeypatch)
     fmt = seen["response_format"]
     assert fmt["type"] == "json_schema" and fmt["json_schema"]["schema"] == model_mod.answer_schema()
     assert seen["extra_body"] == {"provider": {"require_parameters": True}}
+    # A temperature would make OpenRouter route to no endpoint for Opus 5.5.
+    assert seen["temperature"] is None
+
+
+def test_a_call_without_temperature_leaves_it_out_of_the_request(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import llm
+
+    sent = []
+
+    def create(**kwargs):
+        sent.append(kwargs)
+        msg = SimpleNamespace(content='{"ok": true}')
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="stop")], usage=None)
+
+    monkeypatch.setattr(llm.client.chat.completions, "create", create)
+    llm.call_openrouter_within([{"role": "user", "content": "x"}], 5, model="vendor/m", temperature=None)
+    llm.call_openrouter_within([{"role": "user", "content": "x"}], 5)
+    assert "temperature" not in sent[0]
+    assert sent[1]["temperature"] == 0.1
 
 
 def test_answer_schema_is_closed_and_has_no_titles_or_defaults():
