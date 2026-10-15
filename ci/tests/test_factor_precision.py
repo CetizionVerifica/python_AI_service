@@ -5,7 +5,11 @@ import openpyxl
 
 
 def _schema(**kw):
-    from app.schemas.emission_factor import DescriptorColumn, SpreadsheetSchema, YearMapping
+    from app.schemas.emission_factor import (
+        DescriptorColumn,
+        SpreadsheetSchema,
+        YearMapping,
+    )
 
     return SpreadsheetSchema(
         layout_type="simple",
@@ -17,7 +21,7 @@ def _schema(**kw):
     )
 
 
-def test_factors_keep_full_precision_and_are_not_flagged():
+def test_factors_keep_their_precision_up_to_8_decimal_places():
     from app.services import excel_parser as ep
 
     wb = openpyxl.Workbook()
@@ -37,11 +41,26 @@ def test_factors_keep_full_precision_and_are_not_flagged():
         ("Trace gas", "0.00012345"),
         ("Natural gas", "0.18316"),
         ("Formula noise", "0.74994"),
-        ("Text cell", "0.000000015"),
-        ("Tiny float", "0.000000015"),
+        # numeric(18,8): past 8 decimal places a value is rounded, and said so once.
+        ("Text cell", "0.00000002"),
+        ("Tiny float", "0.00000002"),
     ]
     assert factors[1].factor_value == 0.00012345
-    assert warnings == []
+    assert warnings == [
+        "Column '2026': values with more than 8 decimal places are stored rounded "
+        "(for example 0.000000015 is stored as 0.00000002)."
+    ]
+
+
+def test_stored_text_rounds_to_8_decimal_places():
+    from app.services.excel_parser import _stored_text
+
+    assert _stored_text("0.00012345") == ("0.00012345", False)
+    assert _stored_text("0.000282473") == ("0.00028247", True)
+    assert _stored_text("0.0000024723") == ("0.00000247", True)
+    assert _stored_text("0.000012345678") == ("0.00001235", True)
+    assert _stored_text("0.000000001") == ("0", True)
+    assert _stored_text(None) == (None, False)
 
 
 def test_non_numbers_are_skipped():

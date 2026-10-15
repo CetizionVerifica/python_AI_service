@@ -2,7 +2,7 @@ import io
 import logging
 import os
 import re
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
 
@@ -312,6 +312,32 @@ def _factor_text(value) -> Optional[str]:
     return "0" if text in ("-0", "") else text
 
 
+# numeric(18,8) in ESG-lite: a factor or gas part with more decimals is
+# rejected there (the whole row is skipped), so it is rounded here and said so.
+STORED_DECIMALS = 8
+_STORED_STEP = Decimal(1).scaleb(-STORED_DECIMALS)
+
+
+def _stored_text(text: Optional[str]) -> tuple[Optional[str], bool]:
+    """(text rounded half-up to 8 decimal places, whether digits were dropped)."""
+    if text is None:
+        return None, False
+    d = Decimal(text)
+    if d == d.quantize(_STORED_STEP):
+        return text, False
+    q = d.quantize(_STORED_STEP, rounding=ROUND_HALF_UP)
+    out = format(q, "f").rstrip("0").rstrip(".")
+    return ("0" if out in ("-0", "") else out), True
+
+
+def _note_rounding(warnings: list[str], column: str, before: str, after: str) -> None:
+    """One warning per column: values past 8 decimal places are stored rounded."""
+    prefix = f"Column '{column}': values with more than {STORED_DECIMALS} decimal places"
+    if any(w.startswith(prefix) for w in warnings):
+        return
+    warnings.append(f"{prefix} are stored rounded (for example {before} is stored as {after}).")
+
+
 # ---------------------------------------------------------------------------
 # Sub-columns → factor type (layer rule 2, S3-2). Read from the sheet's own
 # labels only; ESG-lite validates the type and a person confirms it.
@@ -483,7 +509,10 @@ def _extract_factors(
             if schema.layout_type == "simple":
                 if year_map.value_column is None:
                     continue
-                text = _factor_text(cells.get(year_map.value_column))
+                raw = _factor_text(cells.get(year_map.value_column))
+                text, rounded = _stored_text(raw)
+                if rounded:
+                    _note_rounding(warnings, f"{year_map.year}", raw, text)
                 if text is not None:
                     row_has_data = True
                     factors.append(
@@ -506,7 +535,11 @@ def _extract_factors(
                 subs = year_map.sub_columns or []
                 factor_subs = [sc for sc in subs if _gas_part(sc.name) is None]
                 gas_subs = [sc for sc in subs if _gas_part(sc.name) is not None]
-                has_wtt = any(_WTT_LABEL.search(sc.name) for sc in factor_subs)
+                # Per row: a Total sums WTT in only when this row's WTT cell has a number.
+                has_wtt = any(
+                    _WTT_LABEL.search(sc.name) and _factor_text(cells.get(sc.column_index)) is not None
+                    for sc in factor_subs
+                )
                 # Gas parts describe the direct factor: "Direct" when the
                 # sheet has one, else the primary sub-column.
                 gas_owner = next(
@@ -523,13 +556,24 @@ def _extract_factors(
                         if note not in warnings:
                             warnings.append(note)
                         continue
-                    text = _factor_text(cells.get(sc.column_index))
-                    if text is not None:
-                        gases[_gas_part(sc.name)] = text
-                for sc in factor_subs:
-                    text = _factor_text(cells.get(sc.column_index))
-                    if text is None:
+                    raw = _factor_text(cells.get(sc.column_index))
+                    if raw is None:
                         continue
+                    if Decimal(raw) < 0:
+                        note = f"Sub-column '{sc.name}': a negative gas part isn't kept (row {row_num})."
+                        warnings.append(note)
+                        continue
+                    text, rounded = _stored_text(raw)
+                    if rounded:
+                        _note_rounding(warnings, sc.name, raw, text)
+                    gases[_gas_part(sc.name)] = text
+                for sc in factor_subs:
+                    raw = _factor_text(cells.get(sc.column_index))
+                    if raw is None:
+                        continue
+                    text, rounded = _stored_text(raw)
+                    if rounded:
+                        _note_rounding(warnings, sc.name, raw, text)
                     is_primary = sc.name == year_map.primary_sub_column
                     # The primary keeps the plain name, as older imports
                     # stored it; the others name their sub-column.
@@ -566,7 +610,10 @@ def _extract_factors(
                         f"{schema.descriptor_join_separator}"
                         f"{disp_col.name}"
                     )
-                    text = _factor_text(value)
+                    raw = _factor_text(value)
+                    text, rounded = _stored_text(raw)
+                    if rounded:
+                        _note_rounding(warnings, disp_col.name, raw, text)
                     if text is not None:
                         row_has_data = True
                         factors.append(

@@ -3,7 +3,12 @@ candidate per sub-column, each with its factor type; gas columns become parts
 of the direct factor (layer rule 2, app/scope3/CLAUDE.md)."""
 import openpyxl
 
-from app.schemas.emission_factor import DescriptorColumn, SpreadsheetSchema, SubColumn, YearMapping
+from app.schemas.emission_factor import (
+    DescriptorColumn,
+    SpreadsheetSchema,
+    SubColumn,
+    YearMapping,
+)
 
 
 def _sheet(title="Fuels"):
@@ -45,10 +50,9 @@ def test_one_candidate_per_sub_column_with_type_and_gas_parts():
         ("Diesel - Direct", "Direct", "combustion", "2.51279", False, False),
         ("Diesel - WTT", "WTT", "wtt", "0.61101", False, False),
         ("Diesel", "Total", "life_cycle", "3.1238", True, True),
-        # Petrol has no WTT figure: its Total is still flagged, because the
-        # sheet's Total sums in its WTT column wherever one is given.
+        # Petrol has no WTT figure, so its Total sums nothing in: combustion, no WTT.
         ("Petrol - Direct", "Direct", "combustion", "2.0844", False, False),
-        ("Petrol", "Total", "life_cycle", "2.0844", True, True),
+        ("Petrol", "Total", "combustion", "2.0844", True, False),
     ]
     direct = factors[0]
     assert (direct.co2_kg, direct.ch4_kg, direct.n2o_kg, direct.biogenic_co2_kg) == (
@@ -154,3 +158,29 @@ def test_gas_shares_in_co2e_are_left_out_with_a_warning():
     ]
     assert len(warnings) == 2
     assert all("gas share in CO2e" in w for w in warnings)
+
+
+def test_gas_parts_are_rounded_to_8_dp_and_negatives_left_out():
+    from app.services import excel_parser as ep
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Fuel", "Unit", "kg CO2e", "kg CO2", "kg CH4", "kg N2O"])
+    ws.append(["Coal", "kg CO2e/tonne", 2403.84, 2380.0, 0.000012345678, -0.5])
+    schema = SpreadsheetSchema(
+        layout_type="sub_columns",
+        descriptor_columns=[DescriptorColumn(column_index=1, header_name="Fuel")],
+        unit_column=DescriptorColumn(column_index=2, header_name="Unit"),
+        data_start_row=2,
+        years=[YearMapping(year=2026, sub_columns=[
+            SubColumn(name=n, column_index=i + 3) for i, n in enumerate(["kg CO2e", "kg CO2", "kg CH4", "kg N2O"])
+        ], primary_sub_column="kg CO2e")],
+    )
+    factors, warnings = ep._extract_factors(ws, schema)
+    f = factors[0]
+    assert (f.co2_kg, f.ch4_kg, f.n2o_kg) == ("2380", "0.00001235", None)
+    assert warnings == [
+        "Column 'kg CH4': values with more than 8 decimal places are stored rounded "
+        "(for example 0.000012345678 is stored as 0.00001235).",
+        "Sub-column 'kg N2O': a negative gas part isn't kept (row 2).",
+    ]
