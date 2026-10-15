@@ -61,3 +61,8 @@ def test_resolved_parts_are_listed_so_the_model_does_not_redo_them():
     resolved = json.loads(user)["ALREADY_RESOLVED"]
     assert resolved["period"] == {"kind": "column", "column": "Month"}
     assert resolved["fields"]["activity_value"] == "Quantity" and resolved["activities"] == {"HSD": "HSD"}
+
+
+def test_the_prompt_asks_for_the_year_an_fy_ends_in():
+    assert "the year it ends in (FY 2025-26 → 2026)" in SYSTEM_PROMPT
+    assert "starts in" not in SYSTEM_PROMPT

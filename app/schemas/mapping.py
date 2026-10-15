@@ -199,7 +199,8 @@ class MappingProfile(_Strict):
     @field_validator("id")
     @classmethod
     def _uuid(cls, v: str) -> str:
-        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", v):
+        # Either case, as the zod side accepts (z.string().uuid()).
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", v, re.IGNORECASE):
             raise ValueError("uuid expected")
         return v
 

@@ -56,6 +56,8 @@ DType = str  # "text" | "number" | "date" | "mixed" | "empty"
 _TOTAL_RE = re.compile(
     r"^\s*(grand\s+)?(sub[\s-]?)?totals?\s*($|[:\-–(\[]|\d|\w*\d|(for|of|ytd|fy|cy|year|annual|quarter|month)\b)", re.IGNORECASE
 )
+# "Q1 subtotal", "Plant A Total", "Site sub-total:": the label ends with the word.
+_TOTAL_END_RE = re.compile(r"(^|[\s(\[\-–])(sub[\s-]?)?totals?\s*[:)\]]?\s*$", re.IGNORECASE)
 # Whole numbers read as year headings ("Supplier | 2023 | 2024").
 _YEAR_MIN, _YEAR_MAX = 1990, 2100
 _DAY_FIRST_RE = re.compile(r"^(?P<a>\d{1,2})[/.-](?P<b>\d{1,2})[/.-](?P<y>\d{4})$|^(?P<y2>\d{4})[/.](?P<m2>\d{1,2})[/.](?P<d2>\d{1,2})$")
@@ -439,7 +441,7 @@ def _is_total(row: list[Any]) -> bool:
         kind = cell_kind(v)
         if kind == "number":
             return False
-        if kind == "text" and _TOTAL_RE.match(cell_text(v)):
+        if kind == "text" and (_TOTAL_RE.match(cell_text(v)) or _TOTAL_END_RE.search(cell_text(v))):
             return True
     return False
 

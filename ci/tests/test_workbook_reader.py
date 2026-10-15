@@ -285,10 +285,28 @@ def test_an_activity_starting_with_total_is_kept_and_a_subtotal_under_a_merged_s
         ws.merge_cells("A3:A5")
         ws.append(["Grand total", None, 530])
         ws.append(["Total:", None, 530])
+        ws.append(["Plant B", "Diesel", 40])
+        ws.append(["Plant B Total", None, 40])
+        ws.append(["Q1 subtotal", None, 570])
+        ws.append(["Site sub-total:", None, 570])
 
     sheet = read_workbook_bytes(xlsx_bytes(build), "xlsx").sheets[0]
-    assert [r["row"] for r in sheet.rows] == [2, 3, 4]
-    assert [(d.row, d.reason) for d in sheet.dropped_rows] == [(5, "total"), (6, "total"), (7, "total")]
+    assert [r["row"] for r in sheet.rows] == [2, 3, 4, 8]
+    assert [(d.row, d.reason) for d in sheet.dropped_rows] == [(5, "total"), (6, "total"), (7, "total"), (9, "total"), (10, "total"), (11, "total")]
+
+
+@pytest.mark.parametrize("label", ["Q1 subtotal", "Q1 Total", "Plant A Total", "Site total", "Year total", "Monthly total", "Total", "Grand Total", "Subtotal Q1"])
+def test_total_labels_at_either_end_are_totals(label):
+    from app.services.workbook.reader import _is_total
+
+    assert _is_total([label, None, 10])
+
+
+@pytest.mark.parametrize("label", ["Total Energies", "Totalgaz", "Diesel", "Totals team diesel"])
+def test_names_that_only_contain_total_are_data(label):
+    from app.services.workbook.reader import _is_total
+
+    assert not _is_total([label, "Diesel", 10])
 
 
 def test_a_merged_title_above_the_header_is_not_part_of_the_column_names():

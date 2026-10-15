@@ -64,7 +64,7 @@ def test_yearly_sheets_are_read_as_cy_and_fy():
     assert cy.period.model_dump() == {"kind": "yearly", "year_type": "CY", "year": 2024}
     assert cy.category.kind == "column" and [v.id for v in cy.category.values] == [3, 4, 5]
     fy = proposal_for("06-yearly-fy.xlsx").sheets[0]
-    assert fy.period.model_dump() == {"kind": "yearly", "year_type": "FY", "year": 2024}
+    assert fy.period.model_dump() == {"kind": "yearly", "year_type": "FY", "year": 2025}  # FY 2024-25 is filed on Mar 31, 2025
     # "Scope" is not a category column: none of its values is a category name.
     assert fy.category.kind == "fixed"
     assert fy.confidence < 0.8
@@ -382,3 +382,13 @@ def test_on_a_months_as_columns_sheet_the_quantity_field_is_the_month_cells_not_
     rows = rows_from_proposal_for(book, s)
     assert sorted(r["activity_value"] for r in rows) == sorted([100, 110, 120, 130, 140, 150, 10, 11, 12, 13, 14, 15])
     assert not any("Fuel consumption" in (r.get("fields") or {}) for r in rows)
+
+
+@pytest.mark.parametrize(
+    "text,year",
+    [("FY 2025-26", 2026), ("FY 2024-25", 2025), ("FY2024/2025", 2025), ("FY 2029-30", 2030), ("FY25", 2025), ("FY 2025", 2025)],
+)
+def test_an_fy_label_gives_the_year_the_fy_ends(text, year):
+    from app.services.mapping.layers import _FY_RE, _fy_end_year
+
+    assert _fy_end_year(_FY_RE.search(text)) == year

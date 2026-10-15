@@ -473,9 +473,7 @@ def _period_rules(draft: Draft, parts_by_column: dict[str, list[str]], taken: se
     for t in texts:
         fy = _FY_RE.search(t)
         if fy:
-            y = int(fy.group(1))
-            y = y + 2000 if y < 100 else y
-            return Part({"kind": "yearly", "year_type": "FY", "year": y}, 0.9, "rules")
+            return Part({"kind": "yearly", "year_type": "FY", "year": _fy_end_year(fy)}, 0.9, "rules")
     for t in texts:
         y = _year_in(t)
         if y and _CY_RE.search(t):
@@ -487,6 +485,22 @@ def _period_rules(draft: Draft, parts_by_column: dict[str, list[str]], taken: se
     # Nothing says when: this month, for the user to change.
     today = date.today()
     return Part({"kind": "monthly_fixed", "date": _month_end(today.year, today.month)}, 0.0, "rules")
+
+
+def _fy_end_year(m: re.Match) -> int:
+    """ESG-lite files an FY year on Mar 31 of ``year``: the year the FY ends.
+    "FY 2024-25" and "FY 2024/2025" end in 2025; a lone "FY 2025" or "FY25" is
+    read the Indian way, as the year it ends."""
+    start = int(m.group(1))
+    start = start + 2000 if start < 100 else start
+    if not m.group(2):
+        return start
+    end = int(m.group(2))
+    if end < 100:
+        end += (start // 100) * 100
+        if end <= start:
+            end += 100
+    return end if start < end <= start + 1 else start + 1
 
 
 def _month_end(year: int, month: int) -> str:

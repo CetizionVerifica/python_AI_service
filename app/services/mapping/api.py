@@ -86,13 +86,23 @@ def propose_document(
     if not ctx.categories:
         raise ValueError("This site has no categories assigned to import into.")
     profiles: list[dict] = []
+    switch_checked = True
     for sheet in workbook.readable_sheets:
         if only_sheets is not None and sheet.name not in only_sheets:
             continue
-        profiles.extend(client.get_mapping_profiles(sheet.fingerprint, site_id, company_id))
+        found = client.get_mapping_profiles(sheet.fingerprint, site_id, company_id)
+        if found is None:
+            # No mapping-profiles route (XI3 not deployed), so ESG-lite has not checked the
+            # client's smart-import switch: the sheet must not go to a third-party model.
+            switch_checked = False
+        else:
+            profiles.extend(found)
     activities = ActivityLookup(client, site_id, company_id)
+    model = model_for_propose() if switch_checked else None
+    if not switch_checked:
+        logger.warning(f"propose document={document_id}: mapping profiles route missing, rules only")
     return propose(
-        workbook, document_id, ctx, profiles, activities, model=model_for_propose(),
+        workbook, document_id, ctx, profiles, activities, model=model,
         sheet_categories=sheet_categories, only_sheets=only_sheets,
     )
 

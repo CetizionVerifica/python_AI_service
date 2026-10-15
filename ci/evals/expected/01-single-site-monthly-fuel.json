@@ -1,0 +1,50 @@
+{
+  "case": "01-single-site-monthly-fuel",
+  "workbook": "01-single-site-monthly-fuel.xlsx",
+  "caller": "manager",
+  "site_id": 1,
+  "expect_status": 200,
+  "expect_error": null,
+  "max_model_calls": 1,
+  "min_profile_hits": 0,
+  "sheets": [
+    {
+      "sheet_name": "Fuel 2025",
+      "layout": "rows",
+      "data_rows": 12,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Quantity",
+        "activity_unit": "Unit",
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "HSD": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    }
+  ],
+  "plan": {
+    "rows": 12,
+    "out_of_scope_rows": 0,
+    "out_of_scope_refs": [],
+    "out_of_scope_refs_rule": null,
+    "held_refs": [],
+    "issues": {},
+    "tco2e": null
+  },
+  "writable_category_ids": [],
+  "commit": true,
+  "hostile_text": null,
+  "depends_on": null,
+  "cross_tenant_probe": false,
+  "checks": [],
+  "note": "The baseline layout; case 15 uploads the same headers again and expects a profile hit."
+}

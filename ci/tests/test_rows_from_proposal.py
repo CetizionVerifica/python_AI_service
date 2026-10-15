@@ -53,7 +53,7 @@ def test_months_as_columns_make_one_row_per_filled_cell():
 
 def test_yearly_period_is_carried_on_every_row():
     _, _, sr = planned("06-yearly-fy.xlsx")
-    assert [r["period"] for r in sr.rows] == [{"kind": "yearly", "year_type": "FY", "year": 2024}] * 3
+    assert [r["period"] for r in sr.rows] == [{"kind": "yearly", "year_type": "FY", "year": 2025}] * 3  # FY 2024-25 ends Mar 31, 2025
     assert [r["activity_unit"] for r in sr.rows] == ["L", "kg", "kWh"]
 
 
