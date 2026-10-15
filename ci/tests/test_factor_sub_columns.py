@@ -120,8 +120,37 @@ def test_gas_label_reader():
     assert _gas_part("kg CO2e") is None
     assert _gas_part("kg CO2 e") is None
     assert _gas_part("CO2 equivalent") is None
-    assert _gas_part("kg CO2e of CH4") == "ch4_kg"
+    assert _gas_part("kg CH4") == "ch4_kg"
+    # DEFRA's per-gas shares are in CO2e: CO2's is kg of CO2, the others are not kg of the gas.
+    assert _gas_part("kg CO2e of CO2 per unit") == "co2_kg"
+    assert _gas_part("kg CO2e of CH4 per unit") == "gas_share_in_co2e"
+    assert _gas_part("kg CO2e of N2O per unit") == "gas_share_in_co2e"
     assert _gas_part("kg N2O") == "n2o_kg"
     assert _gas_part("Outside of scopes") == "biogenic_co2_kg"
     assert _gas_part("Total") is None
     assert _gas_part("WTT") is None
+
+
+def test_gas_shares_in_co2e_are_left_out_with_a_warning():
+    from app.services import excel_parser as ep
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Fuel", "Unit", "kg CO2e", "kg CO2e of CO2 per unit", "kg CO2e of CH4 per unit", "kg CO2e of N2O per unit"])
+    ws.append(["Diesel", "kg CO2e/litre", 2.51279, 2.47703, 0.00019, 0.03557])
+    ws.append(["Petrol", "kg CO2e/litre", 2.0844, 2.0, 0.01, 0.0744])
+    names = ["kg CO2e", "kg CO2e of CO2 per unit", "kg CO2e of CH4 per unit", "kg CO2e of N2O per unit"]
+    schema = SpreadsheetSchema(
+        layout_type="sub_columns",
+        descriptor_columns=[DescriptorColumn(column_index=1, header_name="Fuel")],
+        unit_column=DescriptorColumn(column_index=2, header_name="Unit"),
+        data_start_row=2,
+        years=[YearMapping(year=2026, sub_columns=[SubColumn(name=n, column_index=i + 3) for i, n in enumerate(names)], primary_sub_column="kg CO2e")],
+    )
+    factors, warnings = ep._extract_factors(ws, schema)
+    assert [(f.emission_category_name, f.co2_kg, f.ch4_kg, f.n2o_kg) for f in factors] == [
+        ("Diesel", "2.47703", None, None),
+        ("Petrol", "2", None, None),
+    ]
+    assert len(warnings) == 2
+    assert all("gas share in CO2e" in w for w in warnings)

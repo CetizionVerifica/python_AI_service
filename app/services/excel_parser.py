@@ -331,13 +331,26 @@ _GAS_LABELS = [
 ]
 
 
+_CO2E_LABEL = re.compile(r"co\s*2\s*-?\s*e\b|co₂\s*e|equivalent", re.IGNORECASE)
+
+# Returned by _gas_part for a gas share given in CO2e ("kg CO2e of CH4"):
+# the contract keeps CH4 and N2O in kg of the gas, and turning CO2e back into
+# kg needs a GWP the sheet doesn't state, so the column is left out.
+GAS_SHARE_IN_CO2E = "gas_share_in_co2e"
+
+
 def _gas_part(name: str) -> Optional[str]:
-    """The gas-part field a sub-column fills, or None when it is a factor of its own."""
+    """The gas-part field a sub-column fills, GAS_SHARE_IN_CO2E, or None when it is a factor of its own."""
     if _BIOGENIC_LABEL.search(name):
         return "biogenic_co2_kg"
     for field, pattern in _GAS_LABELS:
         if pattern.search(name):
+            # "kg CO2e of CO2" is kg of CO2 (GWP 1); CH4 and N2O in CO2e are not kg of the gas.
+            if field != "co2_kg" and _CO2E_LABEL.search(name):
+                return GAS_SHARE_IN_CO2E
             return field
+    if _CO2E_LABEL.search(name) and re.search(r"\bof\s+co\s*2\b|of\s+co₂", name, re.IGNORECASE):
+        return "co2_kg"
     return None
 
 
@@ -502,6 +515,14 @@ def _extract_factors(
                 )
                 gases: dict[str, str] = {}
                 for sc in gas_subs:
+                    if _gas_part(sc.name) == GAS_SHARE_IN_CO2E:
+                        note = (
+                            f"Sub-column '{sc.name}' gives a gas share in CO2e, not kg of the gas; it was not kept "
+                            f"(add the gas parts by hand in kg if you need them)."
+                        )
+                        if note not in warnings:
+                            warnings.append(note)
+                        continue
                     text = _factor_text(cells.get(sc.column_index))
                     if text is not None:
                         gases[_gas_part(sc.name)] = text
