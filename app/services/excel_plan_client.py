@@ -450,6 +450,9 @@ def preview_row(planned: dict) -> dict:
             "date_of_reporting": result.get("reporting_date") or (inp.get("period") or {}).get("date"),
         }
     )
+    # A row kept back here never reached the plan: the page offers no Skip or Edit on it.
+    if planned.get("local"):
+        out["local"] = True
     if errors:
         out["row_error"] = "; ".join(str(i.get("message") or i.get("code")) for i in errors)
     if warnings:

@@ -106,6 +106,33 @@ def test_large_ledger_maps_every_row_within_the_plan_limit():
     assert sr.rows[-1]["row_ref"] == "12-large-ledger!A15001"
 
 
+def _pivot_with_title(tmp_path, title):
+    from openpyxl import Workbook
+    wb = Workbook(); ws = wb.active; ws.title = "Power"
+    ws.append([title]); ws.append([])
+    ws.append(["Meter", "Apr-25", "May-25", "Jun-25", "Jul-25", "Aug-25", "Sep-25", "FY Total"])
+    ws.append(["Main incomer", 100, 110, 120, 130, 140, 150, 750])
+    ws.append(["Utility block", 10, 11, 12, 13, 14, 15, 75])
+    p = tmp_path / "power.xlsx"; wb.save(p)
+    return read_workbook(p)
+
+
+def test_a_unit_named_only_in_the_title_is_the_unit_of_every_month_cell(tmp_path):
+    wb = _pivot_with_title(tmp_path, "Electricity consumption (kWh) - FY 2025-26")
+    assert wb.readable_sheets[0].title_units == ["kwh"]
+    proposal = propose(wb, 1, ctx(2), [], lookup(), sheet_categories={"Power": 5})
+    rows = rows_from_proposal(wb, proposal)
+    assert len(rows.rows) == 12  # 2 meters x 6 months; the FY Total column is not a month
+    assert {r["activity_unit"] for r in rows.rows} == {"kwh"}
+    assert not [i for i in rows.local_issues if i.code == "MISSING_UNIT"]
+
+
+def test_two_units_in_the_title_are_ambiguous_and_give_no_unit(tmp_path):
+    wb = _pivot_with_title(tmp_path, "Energy (kWh) and diesel (litre)")
+    proposal = propose(wb, 1, ctx(2), [], lookup(), sheet_categories={"Power": 5})
+    rows = rows_from_proposal(wb, proposal)
+    assert {r.get("activity_unit") for r in rows.rows} <= {"", None} or not rows.rows
+
 
 # ---------------------------------------------------------------------------
 # Review findings (2026-10-14)

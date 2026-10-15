@@ -143,6 +143,26 @@ def test_openrouter_adapter_parses_json_and_refuses_bad_shapes(monkeypatch):
         model_mod.OpenRouterMappingModel(model="test").propose("s", "u")
 
 
+def test_null_parts_in_a_json_mode_answer_read_as_not_given():
+    # JSON-mode models (OpenRouter/Gemini) fill unused parts with null; the
+    # answer must still validate instead of being thrown away as a bad shape.
+    raw = {
+        "site_column": "Plant",
+        "category": {"kind": "fixed", "category_id": 1, "column": None, "values": None, "confidence": 0.95},
+        "period": {"kind": "column", "column": "Date", "date": None, "year_type": None, "year": None, "columns": None, "confidence": 1.0},
+        "fields": [{"key": "Fuel Type", "column": "Fuel", "confidence": None}],
+        "activities": [{"sheet_text": "HSD", "category_id": 1, "factor_name": "Diesel", "confidence": 0.95}],
+        "notes": None,
+    }
+    answer = ModelAnswer.model_validate(raw)
+    assert answer.category.values == [] and answer.category.category_id == 1
+    assert answer.period.columns == [] and answer.period.column == "Date"
+    assert answer.fields[0].confidence == 0.0 and answer.notes == ""
+    # a required part that is null still fails
+    with pytest.raises(Exception):
+        ModelAnswer.model_validate({"category": {"kind": None, "category_id": 1}})
+
+
 # ---------------------------------------------------------------------------
 # Review findings, part 2/2 (2026-10-14)
 # ---------------------------------------------------------------------------

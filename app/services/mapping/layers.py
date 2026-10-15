@@ -19,7 +19,7 @@ from app.schemas.mapping import MAPPING_CONFIRM_BELOW, MAPPING_DISTINCT_VALUES_P
 from app.services.mapping.context import ACTIVITY_KEY, UNIT_KEY, VALUE_KEY, ActivityLookup, CategoryView, ContextView, FieldSpec
 from app.services.mapping.match import best_match, contains_name, names_site, normalise, overlap
 from app.services.mapping.synonyms import FIELD_LABEL_SYNONYMS, part_of_header
-from app.services.workbook.reader import Column, Sheet, month_of_header
+from app.services.workbook.reader import Column, Sheet, month_of_header, unit_tokens_in_header
 
 NEEDS = MAPPING_CONFIRM_BELOW
 _YEAR_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
@@ -59,6 +59,14 @@ class Draft:
     activity_categories: dict[str, int] = field(default_factory=dict)
     not_in_context: list[str] = field(default_factory=list)
     sources: set = field(default_factory=set)
+    # The unit when no column holds it but the quantity's header or the sheet
+    # title names it ("Charged (kg)", "... (kWh) ..."): the unit field then
+    # needs no column (sent as skipped; rows take the header unit).
+    header_unit: Optional[str] = None
+    # Form fields that are the quantity under the form's own name on a
+    # months-as-columns sheet: the month cells are the quantity, so the field
+    # needs no column (sent as skipped, never the total column).
+    cell_quantity: set = field(default_factory=set)
 
     def note_source(self, source: str) -> None:
         self.sources.add(source)
@@ -80,7 +88,7 @@ class Draft:
                     "column": column,
                     "confidence": round(part.confidence if part else 0.0, 3),
                     "source": part.source if part else "rules",
-                    "skipped": column is None and not spec.required,
+                    "skipped": column is None and (not spec.required or (key == UNIT_KEY and self.header_unit is not None) or key in self.cell_quantity),
                 }
             )
         activities = []
@@ -517,7 +525,7 @@ def _field_rules(draft: Draft, parts_by_column: dict[str, list[str]], taken: set
             claim(ACTIVITY_KEY, hit, 0.95)
     # Unit: header means unit, else a text column whose values are all unit tokens.
     if UNIT_KEY in draft.field_specs and (UNIT_KEY not in draft.fields or not draft.fields[UNIT_KEY].resolved):
-        hit = next((c for c in free if c.name not in taken and "activity_unit" in parts_by_column[c.name] and c.dtype == "text" and not c.unit_tokens), None)
+        hit = next((c for c in free if c.name not in taken and "activity_unit" in parts_by_column[c.name] and c.dtype == "text" and not c.unit_tokens and _mostly_units(c)), None)
         if hit is None:
             hit = next((c for c in free if c.name not in taken and c.dtype == "text" and c.samples and all(normalise(s) in _unit_words() for s in c.samples)), None)
             conf = 0.85 if hit else 0.0
@@ -552,6 +560,62 @@ def _field_rules(draft: Draft, parts_by_column: dict[str, list[str]], taken: set
     for key in (ACTIVITY_KEY, VALUE_KEY, UNIT_KEY):
         if key in draft.field_specs and key not in draft.fields:
             draft.fields[key] = Part(None, 0.0, "rules")
+    _unit_from_header(draft)
+    quantity_fields(draft)
+
+
+def _mostly_units(col: Column) -> bool:
+    """A column called "Unit" or "UoM" is the unit column only when its values are units (not equipment names)."""
+    samples = [s for s in (col.samples or []) if str(s).strip()]
+    if not samples:
+        return True
+    words = _unit_words()
+    hits = sum(1 for s in samples if normalise(s) in words or normalise(s).replace(" ", "") in words)
+    return hits * 2 >= len(samples)
+
+
+def _unit_from_header(draft: Draft) -> None:
+    """No unit column, but the quantity's header or the sheet title names the unit: no column is needed."""
+    if UNIT_KEY not in draft.field_specs:
+        return
+    current = draft.fields.get(UNIT_KEY)
+    if current is not None and current.value is not None:
+        return
+    value = draft.fields.get(VALUE_KEY)
+    col = column(draft.sheet, value.value) if value is not None and value.value else None
+    titles = getattr(draft.sheet, "title_units", None) or []
+    # Only what the header itself says (unit_tokens also holds units seen in cells), as rows._header_unit reads it.
+    in_header = unit_tokens_in_header(col.name) if col is not None else []
+    unit = (in_header[0] if in_header else None) or (titles[0] if len(titles) == 1 else None)
+    if unit:
+        draft.header_unit = unit
+        draft.fields[UNIT_KEY] = Part(None, 1.0, "rules")
+
+
+def quantity_fields(draft: Draft) -> None:
+    """A form without a calculation spec marks its quantity column required
+    (ESG-lite's one-value rule: "Fuel consumption", "Amount of gas"). That
+    column is the quantity under the form's own name, so with no column of its
+    own it takes the quantity's column, as the data-entry page stores both. On
+    a months-as-columns sheet the month cells are the quantity: the field needs
+    no column and never takes another (a "FY Total" column is not a month)."""
+    value = draft.fields.get(VALUE_KEY)
+    period = draft.period.value if draft.period is not None and isinstance(draft.period.value, dict) else {}
+    pivot = draft.sheet.layout == "months_as_columns" or period.get("kind") == "months_as_columns"
+    if not pivot and (value is None or value.value is None):
+        return
+    for c in _categories_in_play(draft):
+        if c.calc_mode not in (None, "single"):
+            continue
+        for f in c.fields:
+            if not f.required or f.type != "number" or f.key not in draft.field_specs:
+                continue
+            current = draft.fields.get(f.key)
+            if pivot:
+                draft.fields[f.key] = Part(None, 1.0, "rules")
+                draft.cell_quantity.add(f.key)
+            elif current is None or current.value is None:
+                draft.fields[f.key] = Part(value.value, value.confidence, value.source)
 
 
 def _form_field_rules(draft: Draft, free: list[Column], taken: set[str], claim) -> None:

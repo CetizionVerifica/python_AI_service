@@ -35,6 +35,7 @@ class FakeEsgLite:
         self.plans: dict[str, dict] = {}
         self.fail = fail  # (path suffix, status, body) to answer with an error
         self.counter = 0
+        self.existing_mappings: set = set()
 
     def transport(self):
         return httpx.MockTransport(self.handle)
@@ -110,6 +111,15 @@ class FakeEsgLite:
                 return httpx.Response(400, json={"code": "IMPORT_VALIDATION", "message": "The plan has no ready rows to commit.", "details": {"ready": 0}})
             p["status"] = "committed"
             p["committed"] = {"upload_batch_id": f"batch-{plan_id[-3:]}", "inserted": len(ready), "fera_inserted": 0, "committed_at": "2026-01-01T00:00:00.000Z", "idempotency_key": body["idempotency_key"]}
+            return httpx.Response(200, json=self._plan(plan_id))
+        if request.method == "PATCH":
+            if body["version"] != p["version"]:
+                return httpx.Response(409, json={"code": "IMPORT_PLAN_VERSION_CONFLICT", "message": "Version moved.", "details": {"current_version": p["version"]}})
+            for m in body.get("activity_matches") or []:
+                if m.get("save_mapping") and m["sheet_name"] in self.existing_mappings:
+                    return httpx.Response(400, json={"code": "IMPORT_VALIDATION", "message": "Mapping exists.", "details": {"reason": "MAPPING_EXISTS"}})
+            p.setdefault("matches", []).extend(body.get("activity_matches") or [])
+            p["version"] += 1
             return httpx.Response(200, json=self._plan(plan_id))
         if path.endswith("/cancel"):
             p["status"] = "cancelled"
@@ -560,3 +570,11 @@ def test_plan_page_forwards_the_issue_code_and_filters_local_rows_the_same_way(e
     assert all(r["state"] == "issue" for r in page2["rows"])
     # The local SITE_NOT_ALLOWED row is shown and counted; the MISSING_UNIT one is not.
     assert page1["total_rows"] == 1 and [r["row_ref"] for r in page1["rows"]] == ["Row 400"]
+
+
+def test_a_row_kept_back_from_the_plan_is_marked_local_on_the_preview():
+    # It never reached the plan, so the review screen offers no Skip or Edit on it.
+    other = plans.LocalIssue(9, "Fuel!A9", "HSD", "SITE_NOT_ALLOWED", "This row is for a site other than the one chosen for this upload.", {})
+    assert plans.preview_row(other.as_planned_row())["local"] is True
+    planned = {"row_ref": "Fuel!A2", "state": "ready", "issues": [], "input": {"activity_name": "HSD"}, "result": {}}
+    assert "local" not in plans.preview_row(planned)

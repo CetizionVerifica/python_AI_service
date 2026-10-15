@@ -108,7 +108,11 @@ def needed_parts(draft: Draft) -> dict:
         needed["category"] = "which category (fixed) or which column holds the category and what each value maps to"
     if draft.period is None or not draft.period.resolved:
         needed["period"] = "where the reporting period comes from"
-    missing = [k for k, spec in draft.field_specs.items() if (k not in draft.fields or not draft.fields[k].resolved) and (spec.required or k == "activity_name")]
+    missing = [
+        k
+        for k, spec in draft.field_specs.items()
+        if (k not in draft.fields or not draft.fields[k].resolved) and (spec.required or k == "activity_name") and not (k == "activity_unit" and draft.header_unit) and k not in draft.cell_quantity
+    ]
     if missing:
         needed["fields"] = missing
     acts = [t for t, p in draft.activities.items() if not p.resolved]

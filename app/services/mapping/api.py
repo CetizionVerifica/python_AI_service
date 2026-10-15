@@ -66,7 +66,15 @@ def model_for_propose():
     return configured_model()
 
 
-def propose_document(client: PlanClient, *, document_id: int, site_id: int, company_id: Optional[int]) -> MappingProposal:
+def propose_document(
+    client: PlanClient,
+    *,
+    document_id: int,
+    site_id: int,
+    company_id: Optional[int],
+    sheet_categories: Optional[dict[str, int]] = None,
+    only_sheets: Optional[list[str]] = None,
+) -> MappingProposal:
     workbook, _ = load_workbook_for(document_id)
     if not workbook.readable_sheets:
         raise ValueError("The file has no sheet with at least two data rows.")
@@ -80,6 +88,8 @@ def propose_document(client: PlanClient, *, document_id: int, site_id: int, comp
     profiles: list[dict] = []
     switch_checked = True
     for sheet in workbook.readable_sheets:
+        if only_sheets is not None and sheet.name not in only_sheets:
+            continue
         found = client.get_mapping_profiles(sheet.fingerprint, site_id, company_id)
         if found is None:
             # No mapping-profiles route (XI3 not deployed), so ESG-lite has not checked the
@@ -91,7 +101,10 @@ def propose_document(client: PlanClient, *, document_id: int, site_id: int, comp
     model = model_for_propose() if switch_checked else None
     if not switch_checked:
         logger.warning(f"propose document={document_id}: mapping profiles route missing, rules only")
-    return propose(workbook, document_id, ctx, profiles, activities, model=model)
+    return propose(
+        workbook, document_id, ctx, profiles, activities, model=model,
+        sheet_categories=sheet_categories, only_sheets=only_sheets,
+    )
 
 
 def sheet_rows_from_proposal(payload: dict, principal=None) -> tuple[SheetRows, dict]:

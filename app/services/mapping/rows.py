@@ -81,6 +81,8 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
     activity_col = fields[ACTIVITY_KEY].column if ACTIVITY_KEY in fields else None
     value_col = fields[VALUE_KEY].column if VALUE_KEY in fields else None
     unit_col = fields[UNIT_KEY].column if UNIT_KEY in fields else None
+    if unit_col is not None and unit_col == value_col:
+        unit_col = None  # the quantity column is not a unit column; its header ("Quantity (MT)") gives the unit
     extra_cols = {k: f.column for k, f in fields.items() if k not in (ACTIVITY_KEY, VALUE_KEY, UNIT_KEY)}
     matches = {a.sheet_text: a for a in proposal.activities}
     single_activity = proposal.activities[0].sheet_text if not activity_col and len(proposal.activities) == 1 else None
@@ -120,6 +122,8 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
         base: dict[str, Any] = {"site_id": proposal.site_id, "category_id": int(category_id), "activity_name": activity_text, "meta": {"source": meta_source, "confidence": round(meta_conf, 3)}}
         extra = {k: cells.get(c, "") for k, c in extra_cols.items() if cells.get(c, "")}
         unit = cells.get(unit_col, "").strip() if unit_col else ""
+        if unit and not looks_like_unit(unit):
+            unit = ""  # a column called "Unit" holding equipment names: fall back to the header or title unit
 
         if month_cols:
             for col, d in month_cols:
@@ -132,7 +136,7 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
                 if value is None:
                     local.append(_issue(ref, activity_text or None, "VALUE_NOT_NUMERIC", "The month cell is not a number.", {**cells, "month": col}))
                     continue
-                row = {**base, "row_ref": ref, "period": {"kind": "monthly", "date": d}, "activity_unit": unit or unit_in_cell or _header_unit(sheet, col) or "", "activity_value": value}
+                row = {**base, "row_ref": ref, "period": {"kind": "monthly", "date": d}, "activity_unit": unit or unit_in_cell or _header_unit(sheet, col) or _title_unit(sheet) or "", "activity_value": value}
                 if extra:
                     row["fields"] = {**row.get("fields", {}), **extra}
                 _append(rows, local, row, activity_text, cells)
@@ -145,7 +149,7 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
         if value_col and value_text and value is None:
             local.append(_issue(row_ref, activity_text or None, "VALUE_NOT_NUMERIC", "The activity value is not a number.", cells))
             continue
-        row["activity_unit"] = unit or unit_in_cell or (_header_unit(sheet, value_col) if value_col else None) or _fields_unit(sheet, extra_cols) or ""
+        row["activity_unit"] = unit or unit_in_cell or (_header_unit(sheet, value_col) if value_col else None) or _fields_unit(sheet, extra_cols) or _title_unit(sheet) or ""
         if value is not None:
             row["activity_value"] = value
         if extra:
@@ -165,6 +169,29 @@ def _header_unit(sheet: Sheet, column_name: Optional[str]) -> Optional[str]:
     # Only what the header itself says: Column.unit_tokens also holds units seen in cells ("5 t").
     header_only = unit_tokens_in_header(col.name)
     return header_only[0] if header_only else None
+
+
+_UNIT_PHRASES = {"cubic meter", "cubic metre", "cubic meters", "cubic metres", "tonne.km", "tonne km", "t.km", "passenger.km", "passenger km", "kg co2e", "metric ton", "metric tonne"}
+
+
+def looks_like_unit(text: str) -> bool:
+    """A unit cell names a unit ("Ltr", "MT", "SCM", "kWh", "Cubic meter"),
+    not equipment or free text. Used to ignore a unit column whose cells are
+    not units."""
+    from app.services.mapping.layers import _unit_words
+
+    t = re.sub(r"\s+", " ", str(text).strip().lower()).strip(" .")
+    if not t:
+        return False
+    return t in _unit_words() or t in _UNIT_PHRASES or t.replace(" ", "") in _unit_words()
+
+
+def _title_unit(sheet: Sheet) -> Optional[str]:
+    """The one unit a title line above the header names ("... (kWh) ..."), as
+    the last resort when no column, cell or header gives one. Two different
+    units in the title are ambiguous: none."""
+    units = getattr(sheet, "title_units", None) or []
+    return units[0] if len(units) == 1 else None
 
 
 def _fields_unit(sheet: Sheet, extra_cols: dict[str, str]) -> Optional[str]:

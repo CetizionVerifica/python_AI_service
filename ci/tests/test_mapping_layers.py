@@ -196,6 +196,125 @@ def test_unknown_header_means_nothing():
     assert part_of_header("Remarks") == [] and part_of_header("") == []
 
 
+# ---------------------------------------------------------------------------
+# The user's category choice (confirm screen re-asks for one sheet)
+# ---------------------------------------------------------------------------
+
+def test_a_chosen_category_is_taken_as_resolved_and_its_own_fields_are_mapped():
+    wb = read_workbook(XI1 / "01-single-sheet-monthly.xlsx")
+    name = wb.readable_sheets[0].name
+    s = propose(wb, 1, ctx(2), [], lookup(), sheet_categories={name: 6}).sheets[0]
+    # Business travel (6) instead of the rules' Stationary combustion (3); its form wants a distance
+    assert s.category.kind == "fixed" and s.category.id == 6 and s.category.confidence == 1.0
+    assert "distance" in {f.key for f in s.fields}
+
+
+def test_only_the_named_sheets_are_proposed():
+    wb = read_workbook(XI1 / "04-one-sheet-per-category.xlsx")
+    names = [sh.name for sh in wb.readable_sheets]
+    assert len(names) > 1
+    p = propose(wb, 1, ctx(2), [], lookup(), only_sheets=[names[1]])
+    assert [sh.sheet_name for sh in p.sheets] == [names[1]]
+
+
+def test_a_chosen_category_outside_the_context_is_refused():
+    wb = read_workbook(XI1 / "01-single-sheet-monthly.xlsx")
+    with pytest.raises(ValueError):
+        propose(wb, 1, ctx(2), [], lookup(), sheet_categories={wb.readable_sheets[0].name: 30})
+
+
+def test_a_saved_profile_of_another_category_does_not_override_the_choice():
+    wb = read_workbook(XI1 / "01-single-sheet-monthly.xlsx")
+    first = propose(wb, 1, ctx(2), [], lookup()).sheets[0]
+    profile = {"fingerprint": first.fingerprint, "site_id": 2, "category_id": 3, "sheet_proposal": first.model_dump()}
+    s = propose(wb, 1, ctx(2), [profile], lookup(), sheet_categories={first.sheet_name: 5}).sheets[0]
+    assert s.category.id == 5 and s.source != "profile"
+
+
+# ---------------------------------------------------------------------------
+# Unit from the header; a "Unit" column that holds no units
+# ---------------------------------------------------------------------------
+
+def _ac_topups(tmp_path):
+    from openpyxl import Workbook
+    import datetime as dt
+    wb = Workbook(); ws = wb.active; ws.title = "AC top-ups"
+    ws.append(["Service date", "Unit", "Gas", "Charged (kg)", "Vendor"])
+    ws.append([dt.date(2025, 5, 14), "Admin block AHU", "R410A", 6.5, "CoolServ"])
+    ws.append([dt.date(2025, 9, 2), "Cold room 1", "R410A", 4.0, "CoolServ"])
+    ws.append([dt.date(2025, 11, 20), "QC lab split AC", "R410A", 1.2, "Local tech"])
+    p = tmp_path / "ac.xlsx"; wb.save(p)
+    return read_workbook(p)
+
+
+def test_a_unit_column_holding_equipment_names_is_not_the_unit_and_the_header_unit_needs_no_column(tmp_path):
+    from app.services.mapping.prompt import needed_parts
+    from app.services.mapping.layers import Draft, rules_layer
+    wb = _ac_topups(tmp_path)
+    s = propose(wb, 1, ctx(2), [], lookup(), sheet_categories={"AC top-ups": 3}).sheets[0]
+    unit = next(f for f in s.fields if f.key == "activity_unit")
+    assert unit.column is None and unit.skipped is True and unit.confidence == 1.0
+    assert fields(s)["activity_value"] == "Charged (kg)"
+    # the model is not asked for the unit
+    d = Draft(sheet=wb.readable_sheets[0], ctx=ctx(2))
+    rules_layer(d, lookup())
+    assert d.header_unit == "kg" and "activity_unit" not in needed_parts(d).get("fields", [])
+    # and every row gets the header unit
+    rows = rows_from_proposal_for(wb, s)
+    assert {r["activity_unit"] for r in rows} == {"kg"}
+
+
+def rows_from_proposal_for(wb, sheet):
+    from app.services.mapping.rows import rows_from_proposal
+    p = MappingProposal.model_validate({"document_id": 1, "site_id": 2, "sheets": [sheet.model_dump()], "model": {"name": "none", "calls": 0, "cached_profile_hits": 0}})
+    return rows_from_proposal(wb, p).rows
+
+
+def _quantity_named_ctx(calc_mode="single"):
+    """Category 3 as Glochem's form has it: the quantity column is a required number field named "Fuel consumption"."""
+    from app.services.mapping.context import context_view
+    from ci.tests.mapping_fixtures import CONTEXT
+    raw = copy.deepcopy(CONTEXT)
+    cat = next(c for s in raw["sites"] if s["site_id"] == 2 for c in s["categories"] if c["category_id"] == 3)
+    cat["form"] = {"calc_mode": calc_mode, "fields": [{"key": "Fuel consumption", "label": "Fuel consumption", "type": "number", "required": True}, {"key": "supplier", "label": "Supplier", "type": "text", "required": False}]}
+    return context_view(raw, 2)
+
+
+def _diesel_issues(tmp_path, with_own_column=False):
+    from openpyxl import Workbook
+    import datetime as dt
+    wb = Workbook(); ws = wb.active; ws.title = "Diesel issues"
+    ws.append(["Date", "Fuel", "Qty", "UoM"] + (["Fuel consumption"] if with_own_column else []))
+    for day, qty in ((3, 1200), (17, 600), (28, 450)):
+        ws.append([dt.date(2025, 7, day), "HSD", qty, "L"] + ([qty * 2] if with_own_column else []))
+    p = tmp_path / "diesel.xlsx"; wb.save(p)
+    return read_workbook(p)
+
+
+def test_a_single_mode_forms_required_number_field_takes_the_quantity_column(tmp_path):
+    from app.services.mapping.prompt import needed_parts
+    from app.services.mapping.layers import Draft, rules_layer
+    wb = _diesel_issues(tmp_path)
+    s = propose(wb, 1, _quantity_named_ctx(), [], lookup(), sheet_categories={"Diesel issues": 3}).sheets[0]
+    fc = next(f for f in s.fields if f.key == "Fuel consumption")
+    assert fields(s)["activity_value"] == "Qty" and fc.column == "Qty" and fc.skipped is False and fc.confidence >= 0.8
+    # nothing left for the model to find
+    d = Draft(sheet=wb.readable_sheets[0], ctx=_quantity_named_ctx())
+    rules_layer(d, lookup())
+    assert "Fuel consumption" not in needed_parts(d).get("fields", [])
+    # the rows carry the quantity under the form's name too, as a typed entry does
+    rows = rows_from_proposal_for(wb, s)
+    assert [(r["activity_value"], r["fields"]["Fuel consumption"]) for r in rows] == [(1200, "1200"), (600, "600"), (450, "450")]
+
+
+def test_the_quantity_rule_leaves_an_own_column_and_spec_forms_alone(tmp_path):
+    # a sheet with its own "Fuel consumption" column keeps it
+    s = propose(_diesel_issues(tmp_path, with_own_column=True), 1, _quantity_named_ctx(), [], lookup(), sheet_categories={"Diesel issues": 3}).sheets[0]
+    assert fields(s)["Fuel consumption"] == "Fuel consumption"
+    # a form with a calculation spec multiplies its own fields: no copy of the quantity
+    s = propose(_diesel_issues(tmp_path), 1, _quantity_named_ctx("per_method"), [], lookup(), sheet_categories={"Diesel issues": 3}).sheets[0]
+    assert fields(s)["Fuel consumption"] is None
+
 
 # ---------------------------------------------------------------------------
 # Review findings (2026-10-14)
@@ -241,6 +360,28 @@ def test_a_cell_longer_than_the_contract_allows_does_not_break_the_proposal():
     p = propose(read_workbook_bytes(buf.getvalue(), "xlsx"), 1, ctx(), [], lookup())
     MappingProposal.model_validate(p.model_dump())
     assert [a.sheet_text for a in p.sheets[0].activities] == ["Diesel"]
+
+
+def test_on_a_months_as_columns_sheet_the_quantity_field_is_the_month_cells_not_the_total(tmp_path):
+    from openpyxl import Workbook
+    from app.services.mapping.layers import Draft, rules_layer
+    from app.services.mapping.prompt import needed_parts
+    wb = Workbook(); ws = wb.active; ws.title = "Diesel by month"
+    ws.append(["Diesel issued (litre) FY 2025-26"]); ws.append([])
+    ws.append(["Fuel", "Apr-25", "May-25", "Jun-25", "Jul-25", "Aug-25", "Sep-25", "FY Total"])
+    ws.append(["HSD", 100, 110, 120, 130, 140, 150, 750])
+    ws.append(["LDO", 10, 11, 12, 13, 14, 15, 75])
+    p = tmp_path / "pivot.xlsx"; wb.save(p)
+    book = read_workbook(p)
+    s = propose(book, 1, _quantity_named_ctx(), [], lookup(), sheet_categories={"Diesel by month": 3}).sheets[0]
+    fc = next(f for f in s.fields if f.key == "Fuel consumption")
+    assert s.layout == "months_as_columns" and fc.column is None and fc.skipped is True
+    d = Draft(sheet=book.readable_sheets[0], ctx=_quantity_named_ctx())
+    rules_layer(d, lookup())
+    assert "Fuel consumption" not in needed_parts(d).get("fields", [])
+    rows = rows_from_proposal_for(book, s)
+    assert sorted(r["activity_value"] for r in rows) == sorted([100, 110, 120, 130, 140, 150, 10, 11, 12, 13, 14, 15])
+    assert not any("Fuel consumption" in (r.get("fields") or {}) for r in rows)
 
 
 @pytest.mark.parametrize(

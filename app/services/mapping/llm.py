@@ -11,7 +11,7 @@ import re
 from datetime import date
 from typing import Optional
 
-from app.services.mapping.context import ACTIVITY_KEY, ActivityLookup
+from app.services.mapping.context import ACTIVITY_KEY, UNIT_KEY, ActivityLookup
 from app.services.mapping.layers import Draft, Part, _field_specs, _wordings, column_names, distinct_values
 from app.services.mapping.match import best_match
 from app.services.mapping.model import MappingModel, ModelAnswer, ModelError
@@ -169,6 +169,10 @@ def apply_answer(draft: Draft, answer: ModelAnswer, activities: ActivityLookup) 
         current = draft.fields.get(f.key)
         if current is not None and current.resolved:
             continue
+        if f.key == UNIT_KEY and draft.header_unit:
+            continue  # the header or title already names the unit
+        if f.key in draft.cell_quantity:
+            continue  # the month cells are the quantity
         if f.column in taken and not (current is not None and current.value == f.column):
             continue
         if current is not None and current.value:

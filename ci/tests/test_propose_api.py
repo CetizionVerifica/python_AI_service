@@ -224,6 +224,33 @@ def test_propose_uses_the_configured_model_and_reports_it(api, monkeypatch):
     assert body["sheets"][0]["category"]["source"] == "llm" and body["sheets"][0]["category"]["id"] == 3
 
 
+def test_propose_can_re_ask_for_one_sheet_with_the_users_category(api):
+    client, esg, state = api
+    res = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth())
+    assert res.status_code == 200
+    name = res.json()["sheets"][0]["sheet_name"]
+    again = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2, "sheets": [name], "sheet_categories": {name: 6}}, headers=auth())
+    assert again.status_code == 200
+    sheets = again.json()["sheets"]
+    assert [s["sheet_name"] for s in sheets] == [name]
+    assert sheets[0]["category"]["id"] == 6 and sheets[0]["category"]["confidence"] == 1.0
+
+
+@pytest.mark.parametrize("extra", [{"sheet_categories": ["x"]}, {"sheet_categories": {"Sheet1": "abc"}}, {"sheets": "Sheet1"}, {"sheets": []}, {"sheets": [3]}])
+def test_bad_propose_extras_are_422(api, extra):
+    client, esg, state = api
+    res = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2, **extra}, headers=auth())
+    assert res.status_code == 422
+
+
+def test_a_chosen_category_the_site_does_not_have_is_422(api):
+    client, esg, state = api
+    res = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth())
+    name = res.json()["sheets"][0]["sheet_name"]
+    bad = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2, "sheet_categories": {name: 30}}, headers=auth())
+    assert bad.status_code == 422
+
+
 def test_preview_sends_the_confirmed_activity_matches_to_the_plan(api):
     client, esg, _ = api
     proposal = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth()).json()
