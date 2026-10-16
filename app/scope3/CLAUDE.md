@@ -79,3 +79,11 @@ Uncertainty ranges (Appendix B). Choosing a sample. Any automatic status change 
 - Suggestions can be applied with an editable reason through the boundary service.
 - Extrapolated rows are Pending, secondary, estimated, and carry their basis.
 - `ci/golden` unchanged.
+
+## As built: S3-12 EEIO sector suggestion (2026-10-16)
+- `app/scope3/eeio.py` and `POST /v1/scope3/eeio-sector` (`app/api/scope3.py`): request and response exactly as contracts §5. ESG-lite's service key only (a user token gets 403); ESG-lite calls it from `POST /scope3/screening/sector-suggestions` with its USEEIO library as the sector list.
+- Per line: a deterministic shortlist of 40 sectors by word overlap with the line (description and supplier; the "(NAICS …)" suffix ignored), then one mapping-model call (`OPENROUTER_MAPPING_MODEL` through `llm.call_openrouter_within`, used when `MAPPING_MODEL_PROVIDER` is `openrouter`, or `auto` with the OpenRouter key) that picks up to 3 codes from the shortlist with a confidence. The prompt holds the line's description and supplier and the shortlisted codes and names only: no other line, no amount, and no currency question.
+- Codes outside the shortlist and duplicates are dropped, confidences are clamped to 0–100 and otherwise returned as the model gave them (ESG-lite asks for confirmation below 80). Without a model, or when the call fails or answers in another shape, the shortlist's best 3 come back with the word-match score scaled to at most 60, so a person always confirms them.
+- Logs: one line per request with line, sector and model-call counts.
+- Not built: the `category_matcher.py` `ghg_category` hint (spec AI item 2, "if S3-1 did not add it"). S3-1 proposes GHG numbers in ESG-lite (`src/scope3/taxonomy/propose.ts`) and nothing would call an AI hint, so it is left for a module that needs it.
+- Tests: `ci/tests/test_eeio.py`.

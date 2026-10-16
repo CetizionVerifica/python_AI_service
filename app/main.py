@@ -12,6 +12,7 @@ from app.api.excel import router as excel_router
 from app.core.database import ensure_emission_factor_uploads_table, ensure_pcf_evidence_table, ensure_uploaded_documents_table
 from app.api.sea_route import router as sea_route_router
 from app.api.pcf import router as pcf_router
+from app.api.scope3 import router as scope3_router
 from app.core.auth import allow_service, enforce_site_scope, require_superadmin, require_user
 
 # Setup Logging
@@ -58,6 +59,8 @@ app.include_router(excel_router, prefix="/v1", dependencies=_signed_in)
 app.include_router(sea_route_router, prefix="/v1", dependencies=_user_or_service)
 # Managers and Superadmins only (the roles ESG-lite allows on /pcf/*), per route in app/api/pcf.py.
 app.include_router(pcf_router, prefix="/v1", dependencies=_signed_in)
+# S3-12: ESG-lite's service key only (checked per route in app/api/scope3.py).
+app.include_router(scope3_router, prefix="/v1", dependencies=_user_or_service)
 
 @app.get("/health")
 def health_check():
