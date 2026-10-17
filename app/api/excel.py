@@ -3,22 +3,25 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from typing import Optional
+
+from pydantic import ValidationError
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
 from app.services.excel_parser import (
-    ImportConflict,
+    delete_document_file,
     get_unique_categories,
-    get_preview_rows,
-    import_all_rows,
+    load_mapped_sheet,
     read_headers_from_bytes,
 )
-from app.core.database import ensure_uploaded_documents_table, insert_uploaded_document, get_uploaded_document_by_id
+from app.services import excel_plan_client as plans
+from app.services.mapping import api as mapping_api
+from app.core.database import claim_uploaded_document_for_import, company_id_for_site, release_import_claim
+from app.core.database import insert_uploaded_document, get_uploaded_document_by_id
 from app.core.auth import Principal, require_user
 from app.core import cloudinary_service
 from app.services import storage
 from app.core.config import settings
 
-import pandas as pd
-import io
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/excel", tags=["excel"])
@@ -168,73 +171,200 @@ def unique_categories(payload: dict, principal: Principal = Depends(require_user
 
 
 
+def _bearer(request: Request) -> str:
+    """The caller's own sign-in token, forwarded to ESG-lite so its scoping applies (never the service key)."""
+    header = request.headers.get("authorization") or ""
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="Sign in again to import rows.")
+    return token.strip()
+
+
+def _esg_lite_http_error(e: plans.EsgLiteError) -> HTTPException:
+    # ESG-lite's own status and IM0 body travel on unchanged (never a stack, never SQL).
+    return HTTPException(status_code=e.status, detail=e.body())
+
+
+def _sheet_rows(payload: dict, principal: Optional[Principal] = None) -> tuple[plans.SheetRows, dict]:
+    """The sheet's rows as ImportRows: from a confirmed ``proposal`` (smart import, XI2)
+    or from the site, category, month and column mappings in the payload (contributor path)."""
+    if payload.get("proposal") is not None:
+        return mapping_api.sheet_rows_from_proposal(payload, principal)
+    site_id = int(payload.get("site_id"))
+    category_id = int(payload.get("category_id"))
+    date_of_reporting = str(payload.get("date_of_reporting"))
+    document_id = int(payload["document_id"])
+    mapped_df, document_name = load_mapped_sheet(document_id, payload.get("mappings") or {})
+    sheet = plans.rows_from_frame(mapped_df, payload.get("selected_categories") or [], site_id, category_id, date_of_reporting)
+    return sheet, {"site_id": site_id, "category_id": category_id, "source_name": document_name or f"upload-{document_id}"}
+
+
 @router.post("/preview")
-def preview(payload: dict, principal: Principal = Depends(require_user)):
-    # site_id is checked against the caller's sites by enforce_site_scope.
+def preview(payload: dict, request: Request, principal: Principal = Depends(require_user)):
+    """Plan the sheet on ESG-lite and answer with the plan and a page of its rows.
+
+    Since IM11 the calculation is ESG-lite's: the rows go to POST /imports/plans
+    as ``bulk_upload`` and come back planned (factor, total, FERA twin, issues).
+    With ``plan_id`` the call only pages that plan (``page``, ``page_size``,
+    ``state``, ``code``); ``cancel_plan_id`` frees the plan of an earlier preview.
+    """
+    # site_id is checked against the caller's sites by enforce_site_scope, and again by ESG-lite.
     document_id = _own_document(payload.get("document_id"), principal)
+    payload = {**payload, "document_id": document_id}
     try:
-        mappings = payload.get("mappings") or {}
-        selected_categories = payload.get("selected_categories") or []
         page = int(payload.get("page", 1))
         page_size = int(payload.get("page_size", 100))
-
-        site_id = int(payload.get("site_id"))
-        category_id = int(payload.get("category_id"))
-        date_of_reporting = str(payload.get("date_of_reporting"))
-
-        rows, total = get_preview_rows(
-            document_id=document_id,
-            mappings=mappings,
-            selected_categories=selected_categories,
-            page=page,
-            page_size=page_size,
-            site_id=site_id,
-            category_id=category_id,
-            date_of_reporting=date_of_reporting,
-        )
-        return {"rows": rows, "total_rows": total, "page": page, "page_size": page_size}
-
+        state = payload.get("state") or None
+        code = payload.get("code") or None
+        sheet, ctx = _sheet_rows(payload, principal)
+        with plans.PlanClient(_bearer(request)) as client:
+            plan_id = payload.get("plan_id")
+            if plan_id:
+                return plans.plan_page(client, str(plan_id), page=page, page_size=page_size, state=state, code=code, local_issues=sheet.local_issues, not_selected=sheet.not_selected, sheet_rows=sheet.total_rows)
+            company_id = company_id_for_site(ctx["site_id"]) if principal.is_superadmin else None
+            return plans.plan_sheet(
+                client,
+                sheet=sheet,
+                source_name=ctx["source_name"],
+                company_id=company_id,
+                page=page,
+                page_size=page_size,
+                state=state,
+                code=code,
+                cancel_plan_id=payload.get("cancel_plan_id") or None,
+                mapping=ctx.get("mapping"),
+            )
     except HTTPException:
         raise
+    except plans.EsgLiteError as e:
+        raise _esg_lite_http_error(e)
     except (TypeError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"preview failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch preview.")
 
-# ---- Step 4: import all + calculate + save ----
-@router.post("/import")
-def bulk_import(payload: dict, principal: Principal = Depends(require_user)):
-    # site_id is checked against the caller's sites by enforce_site_scope.
+
+# ---- Smart import (XI2): propose a mapping for one site ----
+def _propose_extras(payload: dict):
+    """Optional ``sheet_categories`` ({sheet name: category id}, the user's
+    choice on the confirm screen) and ``sheets`` (only these sheet names)."""
+    raw_cats = payload.get("sheet_categories")
+    sheet_categories = None
+    if raw_cats is not None:
+        if not isinstance(raw_cats, dict):
+            raise HTTPException(status_code=422, detail="sheet_categories must map sheet names to category ids")
+        try:
+            sheet_categories = {str(k): int(v) for k, v in raw_cats.items()}
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="sheet_categories must map sheet names to category ids")
+    raw_sheets = payload.get("sheets")
+    only_sheets = None
+    if raw_sheets is not None:
+        if not isinstance(raw_sheets, list) or not all(isinstance(x, str) for x in raw_sheets) or not raw_sheets:
+            raise HTTPException(status_code=422, detail="sheets must be a non-empty list of sheet names")
+        only_sheets = raw_sheets
+    return sheet_categories, only_sheets
+
+
+@router.post("/propose")
+def propose(payload: dict, request: Request, principal: Principal = Depends(require_user)):
+    """``{ document_id, site_id }`` → a ``MappingProposal`` for that site (XI0 §2).
+
+    The workbook is read by XI1, the caller's import context and saved
+    mapping profiles are fetched from ESG-lite with the caller's own token,
+    and the layers (profile → rules → model) fill the proposal. The site must
+    be one of the caller's; ESG-lite's refusals (403 ``IMPORT_FORBIDDEN``,
+    ``AI_IMPORT_DISABLED_FOR_CLIENT``) pass through unchanged.
+    """
     document_id = _own_document(payload.get("document_id"), principal)
     try:
-        mappings = payload.get("mappings") or {}
-        selected_categories = payload.get("selected_categories") or []
         site_id = int(payload.get("site_id"))
-        category_id = int(payload.get("category_id"))
-        date_of_reporting = str(payload.get("date_of_reporting"))
-        # Rows are created by whoever signed in, never by a client-sent user_id.
-        user_id = principal.user_id
-
-        res = import_all_rows(
-            document_id=document_id,
-            mappings=mappings,
-            selected_categories=selected_categories,
-            site_id=site_id,
-            category_id=category_id,
-            date_of_reporting=date_of_reporting,
-            chunk_size=2000,  # fast
-            user_id=user_id,
-        )
-
-        # import_all_rows deletes the stored file as soon as the rows commit.
-        return res
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="site_id must be a whole number")
+    if not principal.can_access_site(site_id):
+        raise HTTPException(status_code=403, detail={"code": "IMPORT_FORBIDDEN", "message": "You cannot import into this site."})
+    sheet_categories, only_sheets = _propose_extras(payload)
+    mapping_api.check_propose_rate(principal.user_id)
+    try:
+        with plans.PlanClient(_bearer(request)) as client:
+            company_id = company_id_for_site(site_id) if principal.is_superadmin else None
+            proposal = mapping_api.propose_document(
+                client, document_id=document_id, site_id=site_id, company_id=company_id,
+                sheet_categories=sheet_categories, only_sheets=only_sheets,
+            )
+        return proposal.model_dump()
     except HTTPException:
         raise
-    except ImportConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
+    except plans.EsgLiteError as e:
+        raise _esg_lite_http_error(e)
+    except ValidationError as e:
+        # Never echo the input: a validation error carries the cell text.
+        logger.warning(f"propose for document {document_id}: proposal failed validation ({len(e.errors())} errors)")
+        raise HTTPException(status_code=422, detail="This file could not be turned into a mapping. Check for very long cells and try again.")
+    except (TypeError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
+        logger.error(f"propose failed for document {document_id}: {type(e).__name__}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not work out a mapping for this file.")
+
+
+# ---- Step 4: commit the plan ----
+@router.post("/import")
+def bulk_import(payload: dict, request: Request, principal: Principal = Depends(require_user)):
+    """Commit the previewed plan (``plan_id`` + ``version``) as one pending batch.
+
+    Without a ``plan_id`` the sheet is planned first and committed at once; with
+    one, the plan must be the ``bulk_upload`` plan ``/preview`` made from this
+    file (same name, same row count), else 422. ESG-lite writes the rows; this service only marks the file imported and
+    deletes it. A file is imported once: a second call answers 409.
+    """
+    document_id = _own_document(payload.get("document_id"), principal)
+    payload = {**payload, "document_id": document_id}
+    claimed, status = claim_uploaded_document_for_import(document_id)
+    if not claimed:
+        if status is None:
+            raise HTTPException(status_code=422, detail="Invalid document_id")
+        if status == "importing":
+            raise HTTPException(status_code=409, detail="This file is already being imported.")
+        raise HTTPException(status_code=409, detail="This file has already been imported. Please re-upload it to import again.")
+    try:
+        sheet, ctx = _sheet_rows(payload, principal)
+        with plans.PlanClient(_bearer(request)) as client:
+            plan_id = payload.get("plan_id")
+            version = payload.get("version")
+            if not plan_id:
+                if not sheet.rows:
+                    raise ValueError("No rows to import. Check the category and unit columns and the ticked categories.")
+                company_id = company_id_for_site(ctx["site_id"]) if principal.is_superadmin else None
+                plan = plans.create_plan_from_rows(client, ctx["source_name"], sheet.rows, company_id, mapping=ctx.get("mapping"))
+                plan_id, version = plan["plan_id"], plan["version"]
+            else:
+                plans.check_plan_is_this_sheet(client, str(plan_id), source_name=ctx["source_name"], row_count=len(sheet.rows))
+            if version is None:
+                raise ValueError("version is required with plan_id")
+            res = plans.commit_plan(
+                client,
+                document_id=document_id,
+                plan_id=str(plan_id),
+                version=int(version),
+                local_issues=sheet.local_issues,
+                not_selected=sheet.not_selected,
+                total_rows=sheet.total_rows,
+            )
+        # Rows are committed on ESG-lite, so the spreadsheet is no longer needed.
+        delete_document_file(document_id, new_status="imported")
+        return res
+    except HTTPException:
+        release_import_claim(document_id)
+        raise
+    except plans.EsgLiteError as e:
+        release_import_claim(document_id)
+        raise _esg_lite_http_error(e)
+    except (TypeError, ValueError) as e:
+        release_import_claim(document_id)
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        release_import_claim(document_id)
         logger.error(f"import failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Import failed.")

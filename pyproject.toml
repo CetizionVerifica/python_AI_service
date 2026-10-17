@@ -27,4 +27,5 @@ dependencies = [
     "uvicorn",
     "openpyxl>=3.1.0",
     "pyjwt>=2.15.1",
+    "anthropic>=1.13.0",
 ]

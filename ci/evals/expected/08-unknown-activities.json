@@ -1,0 +1,54 @@
+{
+  "case": "08-unknown-activities",
+  "workbook": "08-unknown-activities.xlsx",
+  "caller": "manager",
+  "site_id": 1,
+  "expect_status": 200,
+  "expect_error": null,
+  "max_model_calls": 1,
+  "min_profile_hits": 0,
+  "sheets": [
+    {
+      "sheet_name": "Fuel",
+      "layout": "rows",
+      "data_rows": 2,
+      "category_id": 1,
+      "category_column": null,
+      "period": {
+        "kind": "column",
+        "column": "Month"
+      },
+      "fields": {
+        "activity_value": "Litres",
+        "activity_unit": null,
+        "activity_name": "Fuel"
+      },
+      "activities": {
+        "High speed diesel (bulk)": "HSD"
+      },
+      "site_column": null,
+      "out_of_scope_values": [],
+      "never_map_columns": []
+    }
+  ],
+  "plan": {
+    "rows": 2,
+    "out_of_scope_rows": 0,
+    "out_of_scope_refs": [],
+    "out_of_scope_refs_rule": null,
+    "held_refs": [],
+    "issues": {
+      "UNKNOWN_ACTIVITY": 2
+    },
+    "tco2e": null
+  },
+  "writable_category_ids": [],
+  "commit": false,
+  "hostile_text": null,
+  "depends_on": null,
+  "cross_tenant_probe": false,
+  "checks": [
+    "activity_needs_confirmation"
+  ],
+  "note": "A suggested match to HSD is correct but must carry confidence < 0.8 or source llm, so the screen asks; no commit in the eval."
+}

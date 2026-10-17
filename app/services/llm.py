@@ -284,9 +284,23 @@ If there is only one invoice, still return it inside the array.
 If there is only one activity per invoice, still return it inside the activities array."""
 
 
-def _attempt(messages: list[dict], slot_wait_s: float, deadline: float | None = None) -> str:
+def _attempt(
+    messages: list[dict],
+    slot_wait_s: float,
+    deadline: float | None = None,
+    *,
+    model: str | None = None,
+    response_format: dict | None = None,
+    max_tokens: int = 13333,
+    extra_body: dict | None = None,
+    temperature: float | None = 0.1,
+) -> str:
     """One OpenRouter call. With a deadline (time.monotonic()), the request gets
-    whatever time is left after waiting for a slot; otherwise LLM_TIMEOUT_S."""
+    whatever time is left after waiting for a slot; otherwise LLM_TIMEOUT_S.
+    ``model``/``response_format`` default to the OCR model in JSON mode.
+    ``temperature=None`` leaves it out of the request: some models (Claude
+    Opus 5.5) accept none, and with ``require_parameters`` OpenRouter then
+    finds no endpoint at all (404)."""
     if not _llm_slots.acquire(timeout=slot_wait_s):
         logger.warning("OpenRouter call skipped: all LLM slots busy")
         raise LLMError("The AI service is busy. Please try again shortly.")
@@ -294,15 +308,23 @@ def _attempt(messages: list[dict], slot_wait_s: float, deadline: float | None = 
         timeout_s = settings.LLM_TIMEOUT_S if deadline is None else deadline - time.monotonic()
         if timeout_s <= 0.1:
             raise LLMError("The AI service is busy. Please try again shortly.")
+        sampling = {} if temperature is None else {"temperature": temperature}
         response = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=model or MODEL_NAME,
             messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.1,
-            max_tokens=13333,
+            response_format=response_format or {"type": "json_object"},
+            max_tokens=max_tokens,
             timeout=timeout_s,
+            extra_body=extra_body,
+            **sampling,
         )
-        return response.choices[0].message.content
+        choice = response.choices[0]
+        if model:
+            usage = getattr(response, "usage", None)
+            logger.info(f"OpenRouter {model} call: in={getattr(usage, 'prompt_tokens', '?')} out={getattr(usage, 'completion_tokens', '?')} finish={choice.finish_reason}")
+        if model and choice.finish_reason == "length":
+            raise LLMError("The AI answer was cut off before it finished.")
+        return choice.message.content
     except LLMError:
         raise
     except Exception as e:
@@ -325,13 +347,14 @@ def _call_openrouter(messages: list[dict]) -> str:
     return _attempt(messages, settings.LLM_TIMEOUT_S)
 
 
-def call_openrouter_within(messages: list[dict], budget_s: float) -> str:
+def call_openrouter_within(messages: list[dict], budget_s: float, **options) -> str:
     """
     One OpenRouter call that finishes, slot wait included, within budget_s,
     for callers that give up after a fixed time. No retries: the caller's own
-    retry (a new request) gets a fresh budget.
+    retry (a new request) gets a fresh budget. ``options`` go to ``_attempt``
+    (model, response_format, max_tokens, extra_body, temperature).
     """
-    return _attempt(messages, budget_s, time.monotonic() + budget_s)
+    return _attempt(messages, budget_s, time.monotonic() + budget_s, **options)
 
 
 def extract_structured_data(

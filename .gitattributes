@@ -1,0 +1,2 @@
+# Shared XI0 fixtures are pinned by sha256 in both repos: keep their bytes (LF) on every OS.
+ci/fixtures/xi0/** -text

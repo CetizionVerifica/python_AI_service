@@ -1,4 +1,4 @@
-# Safety checks for every change headed to redesign/integration or main.
+# Safety checks for every change headed to production or main.
 #
 # Nothing here can reach production: there are no repository secrets in this
 # file (ci/check_ci_isolation.py enforces that), the OpenRouter key is a dummy,
@@ -8,10 +8,10 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, redesign/integration]
+    branches: [main, production]
     types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
-    branches: [main, redesign/integration]
+    branches: [main, production]
 
 permissions:
   contents: read

@@ -1,0 +1,96 @@
+{
+  "name": "01-single-sheet-monthly.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "Diesel",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Month",
+          "letter": "A",
+          "dtype": "text",
+          "distinct": 8,
+          "samples": [
+            "Jan-25",
+            "Feb-25",
+            "Mar-25",
+            "Apr-25",
+            "May-25"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Activity",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "HSD"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Quantity",
+          "letter": "C",
+          "dtype": "number",
+          "distinct": 8,
+          "samples": [
+            "1200",
+            "1210",
+            "1220",
+            "1230",
+            "1240"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 1.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Unit",
+          "letter": "D",
+          "dtype": "text",
+          "distinct": 1,
+          "samples": [
+            "Litre"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Remarks",
+          "letter": "E",
+          "dtype": "empty",
+          "distinct": 0,
+          "samples": [],
+          "fill_ratio": 0.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "6230a6d7c87324c6b21b20a8a70418adec031352a9c422f1cd3fd7b33bcf8f9a",
+      "data_rows": 8,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Diesel!A2",
+        "Diesel!A3",
+        "Diesel!A4"
+      ]
+    }
+  ]
+}

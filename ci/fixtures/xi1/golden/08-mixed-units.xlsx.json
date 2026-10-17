@@ -1,0 +1,80 @@
+{
+  "name": "08-mixed-units.xlsx",
+  "ext": "xlsx",
+  "sheets": [
+    {
+      "name": "Fuel",
+      "index": 0,
+      "header_row": 1,
+      "header_depth": 1,
+      "columns": [
+        {
+          "name": "Date",
+          "letter": "A",
+          "dtype": "date",
+          "distinct": 5,
+          "samples": [
+            "01.04.2025",
+            "02.04.2025",
+            "03.04.2025",
+            "04.04.2025",
+            "05.04.2025"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Fuel",
+          "letter": "B",
+          "dtype": "text",
+          "distinct": 3,
+          "samples": [
+            "Diesel",
+            "LPG",
+            "Coal"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [],
+          "month": null
+        },
+        {
+          "name": "Consumption",
+          "letter": "C",
+          "dtype": "text",
+          "distinct": 5,
+          "samples": [
+            "1,200 litre",
+            "1.5 KL",
+            "400 kg",
+            "0.4 MT",
+            "12 tonnes"
+          ],
+          "fill_ratio": 1.0,
+          "numeric_ratio": 0.0,
+          "unit_tokens": [
+            "litre",
+            "kl",
+            "kg",
+            "mt",
+            "tonnes"
+          ],
+          "month": null
+        }
+      ],
+      "dropped_rows": [],
+      "layout": "rows",
+      "fingerprint": "af9694b36e1642a257488fa0ca89017170a41615f3feff9f6fb12fac1dea8829",
+      "data_rows": 5,
+      "skipped_reason": null,
+      "hidden": false,
+      "row_refs_head": [
+        "Fuel!A2",
+        "Fuel!A3",
+        "Fuel!A4"
+      ]
+    }
+  ]
+}

@@ -34,6 +34,27 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = ""
     DB_NAME: str = "emissions_db"
 
+    # ESG-lite's API, for the bulk upload's plans (IM11): /v1/excel/preview and
+    # /import hand the sheet's rows to POST /imports/plans there, with the
+    # caller's own token. Same host the browser calls (VITE_API_URL in the FE).
+    ESG_LITE_API_URL: str = "http://localhost:3000"
+
+    # Smart Excel import mapping model (XI2). The model layer runs only for the
+    # parts the saved profile and the rules could not resolve.
+    # "auto" (default): OpenRouter when OPENROUTER_API_KEY is set, else
+    # Anthropic when ANTHROPIC_API_KEY is set, else rules only.
+    # "openrouter": the OCR client above with OPENROUTER_MAPPING_MODEL and
+    # structured output. "anthropic": Claude through the Anthropic API, needs
+    # ANTHROPIC_API_KEY. "none": rules only.
+    MAPPING_MODEL_PROVIDER: str = "auto"
+    # The strongest model on OpenRouter for column/field mapping with JSON
+    # schema output (Shyam, 2026-10-15: "use the best model"). Any OpenRouter
+    # model id that supports structured outputs works here.
+    OPENROUTER_MAPPING_MODEL: str = "anthropic/claude-opus-5.5"
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MAPPING_MODEL: str = "claude-sonnet-5-5"
+    MAPPING_MODEL_TIMEOUT_S: float = 60.0
+
     # Cloudinary
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""
