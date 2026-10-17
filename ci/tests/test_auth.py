@@ -324,3 +324,23 @@ def test_excel_wizard_checks_site_document_and_overrides_user(client, throwaway_
     assert calls[-1]["rows"][0]["site_id"] == SITE_B and calls[-1]["company_id"] == 50
 
 
+def test_excel_wizard_explains_uploads_from_before_uploaded_by(client, throwaway_db, monkeypatch):
+    """Rows uploaded before uploaded_by existed have no owner: a clear 409 for
+    everyone but a Superadmin, never another user's file."""
+    from app.api import excel as excel_api
+
+    monkeypatch.setattr(excel_api, "get_unique_categories", lambda document_id, mappings: ([], 0))
+    with throwaway_db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO uploaded_documents (document_name, cloudinary_url, status) "
+            "VALUES ('legacy.xlsx', '/tmp/legacy.xlsx', 'uploaded') RETURNING id"
+        )
+        legacy = cur.fetchone()[0]
+    for who in (USER_A, MANAGER_A, ADMIN_A, USER_B):
+        res = client.post("/v1/excel/unique-categories", headers=bearer(who), json={"document_id": legacy})
+        assert res.status_code == 409, (who, res.text)
+        assert "upload the file again" in res.json()["detail"]
+    res = client.post("/v1/excel/unique-categories", headers=bearer(SUPERADMIN), json={"document_id": legacy})
+    assert res.status_code == 200, res.text
+    # A missing document is still a plain 404.
+    assert client.post("/v1/excel/unique-categories", headers=bearer(USER_A), json={"document_id": 999999}).status_code == 404

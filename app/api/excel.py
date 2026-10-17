@@ -34,6 +34,13 @@ def _own_document(document_id, principal: Principal) -> int:
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="document_id must be a whole number")
     doc = get_uploaded_document_by_id(document_id)
+    if doc and doc.get("uploaded_by") is None and not principal.is_superadmin:
+        # Uploaded before uploaded_by existed: the owner is unknown, so nobody
+        # but a Superadmin may read it. Say so instead of a bare "not found".
+        raise HTTPException(
+            status_code=409,
+            detail="This upload was started before an update and can't be continued. Please upload the file again.",
+        )
     if not doc or not (principal.is_superadmin or doc.get("uploaded_by") == principal.user_id):
         raise HTTPException(status_code=404, detail="Document not found")
     return document_id
