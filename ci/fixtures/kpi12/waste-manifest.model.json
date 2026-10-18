@@ -1,0 +1,10 @@
+{
+  "candidates": [
+    {"kpi_code": "WASTE_HAZARDOUS", "value": 2.4, "unit": "tonnes", "period_start": "2026-06-14", "period_end": "2026-06-14", "site_hint": "CI Plant A", "source_page": 1, "quote": "Waste category: 5.1 Used or spent oil Quantity: 2.4 tonnes", "confidence": 0.7, "why": "used oil quantity on the manifest"},
+    {"kpi_code": "WASTE_HAZARDOUS", "value": 0.6, "unit": "Tonnes", "period_start": "June 2026", "period_end": null, "source_page": 1, "quote": "Empty contaminated containers Quantity: 0.6 tonnes", "confidence": 0.7, "why": "containers quantity on the manifest"},
+    {"kpi_code": "WASTE_HAZARDOUS", "value": 3.0, "unit": "tonnes", "source_page": 1, "quote": "Quantity: 2.4 tonnes", "confidence": 0.75, "why": "2.4 + 0.6"},
+    {"kpi_code": "WASTE_HAZARDOUS", "value": 2400, "unit": "kg", "source_page": 1, "quote": "Used or spent oil Quantity: 2.4 tonnes", "confidence": 0.7, "why": "in kg"},
+    {"kpi_code": "WASTE_HAZARDOUS", "value": 3, "unit": "tonnes", "source_page": 1, "quote": "Total hazardous waste: 3 tonnes", "confidence": 0.9, "why": "a quote that is not in the document"},
+    {"kpi_code": "waste_recycled", "value": 2.4, "unit": "t", "source_page": 1, "quote": "Quantity: 2.4 tonnes", "confidence": 0.5, "why": "wrong case: not a requested code"}
+  ]
+}

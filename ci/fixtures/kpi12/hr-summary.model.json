@@ -1,0 +1,9 @@
+{
+  "candidates": [
+    {"kpi_code": "EMP_PERMANENT_TOTAL", "value": 245, "unit": null, "period_start": "2025-04-01", "period_end": "2026-03-31", "site_hint": null, "source_page": 1, "quote": "Permanent employees\t180\t65\t245", "confidence": 0.9, "why": "found 'Permanent employees ... 245' on sheet Headcount"},
+    {"kpi_code": "EMP_PERMANENT_TOTAL", "value": 283, "unit": "employees", "period_start": "2025-04-01", "period_end": "2026-03-31", "source_page": 1, "quote": "Permanent employees 180 65 245", "confidence": 0.7, "why": "permanent plus other than permanent"},
+    {"kpi_code": "WORKERS_TOTAL", "value": 432, "unit": null, "source_page": 1, "quote": "Workers 410 22 432", "confidence": 0.9, "why": "not asked for"},
+    {"kpi_code": "EMP_FEMALE_SHARE_SENIOR", "value": 18, "unit": "%", "period_start": "2025-04-01", "period_end": "2026-03-31", "source_page": 1, "quote": "Women in senior management (%) 18%", "confidence": 0.55, "why": "share of women in senior management"},
+    {"kpi_code": "TRAINING_HOURS_AVG", "value": "22", "unit": "hours", "period_start": "2025-04-01", "period_end": "2026-03-31", "source_page": 2, "quote": "Average training hours per employee 22 hours", "confidence": 0.8, "why": "found on sheet Training"}
+  ]
+}

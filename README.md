@@ -52,7 +52,7 @@ Every `/v1/*` route requires a caller; `/health` and `/` stay open.
   - `uploaded_by` / `user_id` sent by the client are ignored; the signed-in user is recorded.
   - The Excel import wizard (`/v1/excel/*`) only reads back documents the caller uploaded (Superadmin: any).
   - `/v1/emission-factors/*`, `/v1/category-mappings/*` and `/v1/emission-categories` are Superadmin only.
-- **ESG-lite server-to-server calls** send `X-Service-Key: <AI_SERVICE_KEY>`. That key is accepted only on `/v1/column-config/*` and `/v1/sea-route`.
+- **ESG-lite server-to-server calls** send `X-Service-Key: <AI_SERVICE_KEY>`. That key is accepted only on `/v1/column-config/*` and `/v1/sea-route`, and it is the only caller of `/v1/scope3/eeio-sector`, `/v1/kpi/suggest-values` and `/v1/kpi/suggest-mapping` (a user token gets 403 there).
 
 No token → 401; a valid caller without access → 403 (404 for a record outside their sites).
 

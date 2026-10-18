@@ -1,0 +1,46 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 596 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+50 790 Td
+(Hazardous Waste Manifest \(Form 10\)) Tj T*
+(Manifest number: HWM-2026-00417) Tj T*
+(Generator: CI Plant A, Plot 1, Test Industrial Area) Tj T*
+(Date of dispatch: 14/06/2026) Tj T*
+(Transporter: Green Haul Logistics, vehicle MH-04-AB-1234) Tj T*
+(Receiver: Coastal TSDF, authorised facility) Tj T*
+(Waste category: 5.1 Used or spent oil    Quantity: 2.4 tonnes) Tj T*
+(Waste category: 33.1 Empty contaminated containers    Quantity: 0.6 tonnes) Tj T*
+(Mode of disposal: co-processing and recycling) Tj T*
+(Signed by the generator, transporter and receiver.) Tj T*
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000212 00000 n 
+0000000338 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+985
+%%EOF

@@ -1,0 +1,11 @@
+{
+  "candidates": [
+    {"kpi_code": "WATER_WITHDRAWAL", "value": 1200, "unit": "m³", "breakdown_key": null, "period_start": "2026-04-01", "period_end": "2026-04-30", "site_hint": "CI Plant A, Plot 1", "source_page": 2, "quote": "Water consumed: 1,200 m3", "confidence": 0.92, "why": "found 'Water consumed: 1,200 m3' on page 2"},
+    {"kpi_code": "WATER_WITHDRAWAL", "value": "800", "unit": "m3", "breakdown_key": "groundwater", "period_start": "2026-04-01", "period_end": "2026-04-30", "site_hint": null, "source_page": 1, "quote": "Of which groundwater (borewell, metered): 800 m3", "confidence": 0.85, "why": "groundwater share stated on the meter page"},
+    {"kpi_code": "WATER_WITHDRAWAL", "value": 400, "unit": "m3", "breakdown_key": "third_party", "period_start": "2026-04-01", "period_end": "2026-04-30", "site_hint": null, "source_page": 2, "quote": "Of which municipal (third-party) supply: 400 m3", "confidence": 85, "why": "municipal supply stated on page 2"},
+    {"kpi_code": "ENERGY_TOTAL", "value": 54300, "unit": "kWh", "source_page": 1, "quote": "Amount payable: Rs 54,300.00", "confidence": 0.4, "why": "not asked for"},
+    {"kpi_code": "WATER_WITHDRAWAL", "value": 1200000, "unit": "litre", "source_page": 2, "quote": "Water consumed: 1,200 m3", "confidence": 0.8, "why": "converted to litres"},
+    {"kpi_code": "WATER_WITHDRAWAL", "value": 800, "unit": "m3", "breakdown_key": "rainwater", "source_page": 2, "quote": "Of which groundwater (borewell, metered): 800 m3", "confidence": 0.5, "why": "breakdown the KPI does not have"},
+    {"kpi_code": "WATER_DISCHARGE", "value": 960, "unit": "m3", "source_page": 2, "quote": "Sewerage charge applied on 80% of water consumed.", "confidence": 0.6, "why": "80% of 1,200 m3"}
+  ]
+}
