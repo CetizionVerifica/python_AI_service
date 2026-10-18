@@ -11,3 +11,8 @@
 
 ## Scope 3 — see ESG-lite docs/scope3/
 - `app/scope3/` and the factor sheet parser read and map data only: they keep WTT and per-gas columns as separate factor types and may suggest an EEIO sector or a GHG category with a confidence. They never calculate totals or choose the method for a row.
+
+## KPI tracking — see docs/kpi/ (in ESG-lite)
+- `app/kpi/` suggests only: KPI values read from documents (value, unit, period, page, confidence) and mappings for custom KPIs. It never writes values, never approves, and never calculates a reported total.
+- Inputs are scoped by the caller's company (the backend passes `company_id`, the selected KPI codes and the document); log ids, never document contents.
+- Working spec: `app/kpi/CLAUDE.md` (layer) and `app/kpi/KPI-12.CLAUDE.md` (module).
