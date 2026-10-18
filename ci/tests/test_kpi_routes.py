@@ -249,13 +249,21 @@ def test_no_model_or_a_failed_call_is_503_ai_not_available(client, monkeypatch):
 # The upload behind "Fill from a document"
 # ---------------------------------------------------------------------------
 
-def test_upload_stores_the_document_for_the_signed_in_user(client, model, throwaway_db):
+def test_upload_stores_the_document_for_the_signed_in_user(client, model, throwaway_db, monkeypatch):
+    # Never the real Cloudinary, even on a machine whose environment has its credentials.
+    from app.core import cloudinary_service
+    from app.core.config import settings
+    monkeypatch.setattr(cloudinary_service, "is_configured", lambda: False)
     pdf = (FIXTURES / "water-bill.pdf").read_bytes()
     assert client.post("/v1/kpi/documents", files={"file": ("water-bill.pdf", pdf, "application/pdf")}).status_code == 401
     assert client.post("/v1/kpi/documents", headers=SERVICE, files={"file": ("water-bill.pdf", pdf, "application/pdf")}).status_code == 403
     assert client.post("/v1/kpi/documents", headers=token(SUPERADMIN, "Superadmin"), files={"file": ("water-bill.pdf", pdf, "application/pdf")}).status_code == 403
     assert client.post("/v1/kpi/documents", headers=token(USER_A), files={"file": ("tool.exe", b"MZ", "application/octet-stream")}).status_code == 400
     assert client.post("/v1/kpi/documents", headers=token(USER_A), files={"file": ("empty.pdf", b"", "application/pdf")}).status_code == 400
+    with monkeypatch.context() as m:
+        m.setattr(settings, "MAX_FILE_MB", 0)
+        too_big = client.post("/v1/kpi/documents", headers=token(USER_A), files={"file": ("water-bill.pdf", pdf, "application/pdf")})
+        assert too_big.status_code == 400 and "larger than" in too_big.text
 
     r = client.post("/v1/kpi/documents", headers=token(USER_A), files={"file": ("water-bill.pdf", pdf, "application/pdf")})
     assert r.status_code == 200, r.text

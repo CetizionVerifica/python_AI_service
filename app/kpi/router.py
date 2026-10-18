@@ -68,11 +68,18 @@ async def upload_document(file: UploadFile = File(...), principal: Principal = D
     ext = documents.ext_of(filename)
     if ext not in documents.SUPPORTED_EXTS:
         raise HTTPException(status_code=400, detail="Upload a PDF, an image, an .xlsx or a .csv file")
-    contents = await file.read()
+    # Read in chunks and stop past the limit, so an oversized upload is never held in memory whole.
+    limit = settings.MAX_FILE_MB * 1024 * 1024
+    chunks: list[bytes] = []
+    size = 0
+    while chunk := await file.read(1024 * 1024):
+        size += len(chunk)
+        if size > limit:
+            raise HTTPException(status_code=400, detail=f"The file is larger than {settings.MAX_FILE_MB} MB")
+        chunks.append(chunk)
+    contents = b"".join(chunks)
     if not contents:
         raise HTTPException(status_code=400, detail="The file is empty")
-    if len(contents) > settings.MAX_FILE_MB * 1024 * 1024:
-        raise HTTPException(status_code=400, detail=f"The file is larger than {settings.MAX_FILE_MB} MB")
 
     local_path = Path(settings.TEMP_DIR) / f"{uuid.uuid4()}.{ext}"
     local_path.write_bytes(contents)
