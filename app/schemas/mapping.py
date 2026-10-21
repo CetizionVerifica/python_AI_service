@@ -166,6 +166,9 @@ class ModelTelemetry(_Strict):
     name: Annotated[str, Field(max_length=100)]
     calls: Annotated[int, Field(ge=0)]
     cached_profile_hits: Annotated[int, Field(ge=0)]
+    # Why the last model call gave no usable answer ("http_402", "LLMError", ...):
+    # an error code only, never the provider's message or sheet text.
+    error: Optional[Annotated[str, Field(max_length=60)]] = None
 
 
 class MappingProposal(_Strict):
