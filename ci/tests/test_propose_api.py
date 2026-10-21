@@ -224,6 +224,29 @@ def test_propose_uses_the_configured_model_and_reports_it(api, monkeypatch):
     assert body["sheets"][0]["category"]["source"] == "llm" and body["sheets"][0]["category"]["id"] == 3
 
 
+def test_propose_reports_why_the_model_gave_no_answer(api, monkeypatch):
+    from app.services.mapping.model import ModelError
+
+    class Refused(Exception):
+        status_code = 401
+
+    class Model:
+        name = "fake-claude"
+
+        def propose(self, system, user):
+            try:
+                raise Refused("bad key")
+            except Refused as e:
+                raise ModelError("The mapping model refused the request.") from e
+
+    monkeypatch.setattr(mapping_api, "model_for_propose", lambda: Model())
+    client, _, state = api
+    state["file"] = "09-two-row-merged-header.xlsx"
+    res = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth())
+    assert res.status_code == 200
+    assert res.json()["model"] == {"name": "fake-claude", "calls": 1, "cached_profile_hits": 0, "error": "http_401"}
+
+
 def test_propose_can_re_ask_for_one_sheet_with_the_users_category(api):
     client, esg, state = api
     res = client.post("/v1/excel/propose", json={"document_id": DOC, "site_id": 2}, headers=auth())
