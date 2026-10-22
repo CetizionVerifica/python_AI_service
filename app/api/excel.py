@@ -187,7 +187,7 @@ def _esg_lite_http_error(e: plans.EsgLiteError) -> HTTPException:
 
 def _sheet_rows(payload: dict, principal: Optional[Principal] = None, client: Optional[plans.PlanClient] = None) -> tuple[plans.SheetRows, dict]:
     """The sheet's rows as ImportRows: from a confirmed ``proposal`` (smart import, XI2)
-    or from the site, category, month and column mappings in the payload (contributor path).
+    or from the site, category, month (or CY/FY year) and column mappings in the payload (contributor path).
     With the caller's ``client``, a smart-import row whose unit readings disagree takes the one
     its activity accepts (ESG-lite #183)."""
     if payload.get("proposal") is not None:
@@ -201,7 +201,8 @@ def _sheet_rows(payload: dict, principal: Optional[Principal] = None, client: Op
     date_of_reporting = str(payload.get("date_of_reporting"))
     document_id = int(payload["document_id"])
     mapped_df, document_name = load_mapped_sheet(document_id, payload.get("mappings") or {})
-    sheet = plans.rows_from_frame(mapped_df, payload.get("selected_categories") or [], site_id, category_id, date_of_reporting)
+    # F-21: a yearly upload files every row for one CY/FY year (date cells aren't read).
+    sheet = plans.rows_from_frame(mapped_df, payload.get("selected_categories") or [], site_id, category_id, date_of_reporting, plans.yearly_period(payload))
     return sheet, {"site_id": site_id, "category_id": category_id, "source_name": document_name or f"upload-{document_id}"}
 
 

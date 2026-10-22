@@ -277,7 +277,7 @@ def row_number(row_ref: Optional[str]) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def import_row_from_record(index: Any, record: dict, site_id: int, category_id: int, fallback_date: str) -> tuple[Optional[dict], Optional[LocalIssue]]:
+def import_row_from_record(index: Any, record: dict, site_id: int, category_id: int, fallback_date: str, yearly: Optional[dict] = None) -> tuple[Optional[dict], Optional[LocalIssue]]:
     """One mapped sheet row as an ImportRow (contracts §1), or the reason it can't be one.
 
     Mapped keys: ``emission_category`` → ``activity_name``; ``activity_value`` →
@@ -285,7 +285,9 @@ def import_row_from_record(index: Any, record: dict, site_id: int, category_id: 
     ``date_of_reporting`` → a monthly period on that day (else the upload's
     month end); every other key is a form field, ``extra_<key>`` under ``key``.
     Field values travel as the sheet's text: ESG-lite parses numbers itself,
-    commas included, the way it does for a typed entry.
+    commas included, the way it does for a typed entry. With ``yearly``
+    (``{"kind": "yearly", "year_type", "year"}``, ESG-lite F-21) every row is
+    filed for that year and date cells are not read.
     """
     from app.services.excel_parser import _row_reporting_date
 
@@ -327,7 +329,7 @@ def import_row_from_record(index: Any, record: dict, site_id: int, category_id: 
         "row_ref": row_ref,
         "site_id": int(site_id),
         "category_id": int(category_id),
-        "period": {"kind": "monthly", "date": row_date},
+        "period": dict(yearly) if yearly else {"kind": "monthly", "date": row_date},
         "activity_name": category,
         "activity_unit": unit,
     }
@@ -338,8 +340,8 @@ def import_row_from_record(index: Any, record: dict, site_id: int, category_id: 
     return row, None
 
 
-def rows_from_frame(mapped_df: pd.DataFrame, selected_categories: Iterable[str], site_id: int, category_id: int, fallback_date: str) -> SheetRows:
-    """The sheet's mapped rows as ImportRows, keeping the ticked categories only."""
+def rows_from_frame(mapped_df: pd.DataFrame, selected_categories: Iterable[str], site_id: int, category_id: int, fallback_date: str, yearly: Optional[dict] = None) -> SheetRows:
+    """The sheet's mapped rows as ImportRows, keeping the ticked categories only; with ``yearly`` all for that CY/FY year."""
     total_rows = len(mapped_df)
     selected = {str(c).strip() for c in (selected_categories or []) if str(c).strip()}
     if selected and KEY_CATEGORY in mapped_df.columns:
@@ -351,7 +353,7 @@ def rows_from_frame(mapped_df: pd.DataFrame, selected_categories: Iterable[str],
     rows: list[dict] = []
     local: list[LocalIssue] = []
     for index, record in zip(mapped_df.index, mapped_df.to_dict("records")):
-        row, issue = import_row_from_record(index, record, site_id, category_id, fallback_date)
+        row, issue = import_row_from_record(index, record, site_id, category_id, fallback_date, yearly)
         if row is not None:
             rows.append(row)
         elif issue is not None:
@@ -362,6 +364,18 @@ def rows_from_frame(mapped_df: pd.DataFrame, selected_categories: Iterable[str],
 # ---------------------------------------------------------------------------
 # Plans
 # ---------------------------------------------------------------------------
+
+
+def yearly_period(payload: dict) -> Optional[dict]:
+    """The upload's yearly period (ESG-lite F-21): ``reporting_period: "yearly"`` with ``year_type``
+    CY or FY and a ``year``; None for a monthly upload. Raises ValueError on a bad one."""
+    if payload.get("reporting_period") != "yearly":
+        return None
+    year_type = payload.get("year_type")
+    year = payload.get("year")
+    if year_type not in ("CY", "FY") or not isinstance(year, int) or isinstance(year, bool) or not 2000 <= year <= 2100:
+        raise ValueError("A yearly upload needs year_type CY or FY and a year between 2000 and 2100.")
+    return {"kind": "yearly", "year_type": year_type, "year": year}
 
 
 def _chunks(rows: list[dict], size: int = ROWS_PER_REQUEST) -> Iterable[list[dict]]:
