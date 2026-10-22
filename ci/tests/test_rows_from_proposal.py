@@ -190,3 +190,71 @@ def test_months_as_columns_cells_that_are_not_numbers_are_flagged_and_dashes_are
 def test_a_row_with_a_cell_too_long_for_esg_lite_is_kept_back():
     sr = _pivot_rows([["Diesel", "litre", 1, 2, 3, 4, 5, 6], ["y" * 301, "litre", 1, 2, 3, 4, 5, 6]])
     assert {i.code for i in sr.local_issues} == {"TEXT_TOO_LONG"} and len(sr.rows) == 6
+
+
+# ---------------------------------------------------------------------------
+# #183 P1: when a row's unit readings disagree, the one its activity accepts
+# ---------------------------------------------------------------------------
+
+from app.services.mapping.context import AcceptedUnitsLookup  # noqa: E402
+from app.services.mapping.rows import pick_unit  # noqa: E402
+
+
+def test_pick_unit_keeps_the_first_reading_unless_only_a_later_one_is_accepted():
+    asked = []
+
+    def accepted():
+        asked.append(1)
+        return ["kg", "tonne"]
+
+    assert pick_unit([None, "", "Litre", "kg"]) == "Litre"  # no list: the first reading, as before
+    assert pick_unit(["litre", "kg"], accepted) == "kg"  # the unit column disagrees; the header's kg is accepted
+    assert pick_unit(["kg", "tonne"], accepted) == "kg"  # both accepted: the first
+    assert pick_unit(["MT", "kg"], accepted) == "MT"  # MT is the engine's tonne, so it counts as accepted
+    assert pick_unit(["litre", "kWh"], accepted) == "litre"  # none accepted: the first, the server says why
+    asked.clear()
+    assert pick_unit(["kg", "KG", " kg "], accepted) == "kg" and asked == []  # readings agree: nothing is asked
+    assert pick_unit([None, None]) == ""
+
+
+def _sheet_with_unit_column(tmp_path, units):
+    from openpyxl import Workbook
+    wb = Workbook(); ws = wb.active; ws.title = "Fuel"
+    ws.append(["Date", "Fuel", "Quantity (kg)", "Unit"])
+    for i, u in enumerate(units):
+        ws.append([f"2025-0{i + 1}-28", "LPG", 100 + i, u])
+    p = tmp_path / "fuel.xlsx"; wb.save(p)
+    return read_workbook(p)
+
+
+def test_a_unit_column_that_disagrees_with_the_quantity_header_takes_the_accepted_reading(tmp_path):
+    wb = _sheet_with_unit_column(tmp_path, ["litre", "kg"])
+    proposal = propose(wb, 1, ctx(2), [], lookup(), sheet_categories={"Fuel": 3})
+    plain = rows_from_proposal(wb, proposal)
+    assert [r["activity_unit"] for r in plain.rows] == ["litre", "kg"]  # without the list: the unit column, as before
+
+    calls = []
+
+    def accepted(category_id, name):
+        calls.append((category_id, name))
+        return ["kg", "tonne"] if (category_id, name) == (3, "LPG") else None
+
+    hinted = rows_from_proposal(wb, proposal, accepted)
+    assert [r["activity_unit"] for r in hinted.rows] == ["kg", "kg"]
+    assert calls == [(3, "LPG")]  # asked once, for the row whose readings disagree
+
+
+def test_accepted_units_are_read_by_name_through_the_activity_search_and_cached():
+    class Search:
+        def __init__(self):
+            self.calls = 0
+
+        def options(self, category_id, q=""):
+            self.calls += 1
+            return [{"name": "LPG", "accepted_units": ["kg", "tonne"]}, {"name": "LPG cylinders", "accepted_units": ["cylinder"]}]
+
+    search = Search()
+    accepted = AcceptedUnitsLookup(search)
+    assert accepted(3, "lpg") == ["kg", "tonne"]
+    assert accepted(3, "LPG") == ["kg", "tonne"] and search.calls == 1
+    assert accepted(3, "Coal") is None  # not one of the category's names

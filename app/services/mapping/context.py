@@ -173,3 +173,21 @@ class StaticActivityLookup(ActivityLookup):
         if needle:
             rows = [r for r in rows if needle in r["name"].lower()]
         return rows[:ACTIVITY_SEARCH_LIMIT]
+
+
+class AcceptedUnitsLookup:
+    """``accepted_units`` per category × factor name (ESG-lite #183), read through the activity
+    search with the caller's token and cached per request. None when ESG-lite doesn't send them
+    (an older API) or the name isn't one of the category's."""
+
+    def __init__(self, lookup: ActivityLookup):
+        self._lookup = lookup
+        self._cache: dict[tuple[int, str], Optional[list[str]]] = {}
+
+    def __call__(self, category_id: int, name: str) -> Optional[list[str]]:
+        key = (int(category_id), (name or "").strip().lower())
+        if key not in self._cache:
+            match = next((o for o in self._lookup.options(key[0], name) if str(o.get("name") or "").strip().lower() == key[1]), None)
+            units = match.get("accepted_units") if match else None
+            self._cache[key] = [str(u) for u in units] if isinstance(units, list) else None
+        return self._cache[key]
