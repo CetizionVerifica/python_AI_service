@@ -578,3 +578,26 @@ def test_a_row_kept_back_from_the_plan_is_marked_local_on_the_preview():
     assert plans.preview_row(other.as_planned_row())["local"] is True
     planned = {"row_ref": "Fuel!A2", "state": "ready", "issues": [], "input": {"activity_name": "HSD"}, "result": {}}
     assert "local" not in plans.preview_row(planned)
+
+
+def test_a_yearly_upload_files_every_row_for_the_year():
+    """ESG-lite F-21: a yearly CY/FY upload files every row for that year; date cells are not read."""
+    df = frame(
+        [
+            {"emission_category": "Diesel", "activity_value": "1,200", "activity_data_unit": "litre", "date_of_reporting": "15.01.2025"},
+            {"emission_category": "Diesel", "activity_value": 500, "activity_data_unit": "litre", "date_of_reporting": ""},
+        ]
+    )
+    yearly = plans.yearly_period({"reporting_period": "yearly", "year_type": "CY", "year": 2025})
+    sheet = plans.rows_from_frame(df, [], SITE, CATEGORY, MONTH_END, yearly)
+    assert [r["period"] for r in sheet.rows] == [{"kind": "yearly", "year_type": "CY", "year": 2025}] * 2
+    assert sheet.rows[0]["period"] is not sheet.rows[1]["period"], "each row gets its own period dict"
+
+
+def test_yearly_period_reads_only_a_valid_year():
+    assert plans.yearly_period({}) is None
+    assert plans.yearly_period({"reporting_period": "monthly", "year_type": "CY", "year": 2025}) is None
+    assert plans.yearly_period({"reporting_period": "yearly", "year_type": "FY", "year": 2026}) == {"kind": "yearly", "year_type": "FY", "year": 2026}
+    for bad in ({"year_type": "XY", "year": 2025}, {"year_type": "CY", "year": "2025"}, {"year_type": "CY", "year": 1999}, {"year_type": "CY", "year": True}, {"year_type": "CY"}):
+        with pytest.raises(ValueError):
+            plans.yearly_period({"reporting_period": "yearly", **bad})
