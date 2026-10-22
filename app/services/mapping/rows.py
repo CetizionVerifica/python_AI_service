@@ -13,7 +13,7 @@ re-checks every row against the caller's scope anyway.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import pandas as pd
 
@@ -75,7 +75,48 @@ def _split_value_unit(text: str) -> tuple[Optional[float], Optional[str]]:
     return number, (unit if unit else None)
 
 
-def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
+# The engine's spellings of one unit (mirror of ESG-lite src/services/emissionWrite/units.ts
+# UNIT_ALIASES, plus ton/tons/tonnes, which it converts 1:1 to tonne). Only used to compare a
+# reading with the activity's accepted units; a unit is never rewritten or converted here.
+_SAME_UNIT = {
+    "mt": "tonne", "m.t.": "tonne", "metric ton": "tonne", "metric tons": "tonne", "metric tonne": "tonne", "metric tonnes": "tonne",
+    "ton": "tonne", "tons": "tonne", "tonnes": "tonne",
+    "scm": "cubic meter", "sm3": "cubic meter", "sm³": "cubic meter", "m3": "cubic meter", "m³": "cubic meter",
+    "cubic metre": "cubic meter", "cubic meters": "cubic meter", "cubic metres": "cubic meter",
+    "ltr": "litre", "ltrs": "litre", "lt": "litre", "lts": "litre", "l": "litre", "litres": "litre", "liter": "litre", "liters": "litre",
+    "kgs": "kg", "kilogram": "kg", "kilograms": "kg",
+    "kilo litre": "kl", "kilo litres": "kl", "kilo liter": "kl", "kilo liters": "kl", "kilolitre": "kl", "kilolitres": "kl", "kiloliter": "kl", "kiloliters": "kl",
+    "kms": "km", "kilometre": "km", "kilometres": "km", "kilometer": "km", "kilometers": "km",
+    "mi": "mile", "miles": "mile", "metre": "m", "metres": "m", "meter": "m", "meters": "m",
+}
+
+
+def _unit_key(unit: str) -> str:
+    u = (unit or "").strip().lower()
+    return _SAME_UNIT.get(u, u)
+
+
+AcceptedUnits = Callable[[int, str], Optional[list[str]]]
+
+
+def pick_unit(readings: list[Optional[str]], accepted: Optional[Callable[[], Optional[list[str]]]] = None) -> str:
+    """The row's unit from its readings in order (unit column, value cell, header, form field,
+    title). The first one, as before, unless the readings disagree and the activity's accepted
+    units (ESG-lite #183) take a later one but not the first: then that one, as a sheet can name
+    the right unit in its header and something else in a unit column. ``accepted`` is only asked
+    when the readings disagree."""
+    found = [r.strip() for r in readings if r and r.strip()]
+    if not found:
+        return ""
+    if accepted is None or len({_unit_key(r) for r in found}) < 2:
+        return found[0]
+    allowed = {_unit_key(u) for u in (accepted() or [])}
+    if not allowed or _unit_key(found[0]) in allowed:
+        return found[0]
+    return next((r for r in found[1:] if _unit_key(r) in allowed), found[0])
+
+
+def rows_from_sheet(sheet: Sheet, proposal: SheetProposal, accepted: Optional[AcceptedUnits] = None) -> SheetRows:
     """The ``ImportRow``s of one sheet under its confirmed proposal."""
     fields = {f.key: f for f in proposal.fields if f.column and not f.skipped}
     activity_col = fields[ACTIVITY_KEY].column if ACTIVITY_KEY in fields else None
@@ -117,6 +158,10 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
             continue
 
         match = matches.get(activity_text)
+        # The factor the wording resolves to names the accepted units (#183); asked only when readings disagree.
+        factor_name = (match.factor_name if match and match.factor_name else activity_text) or ""
+        cat_id = int(category_id)
+        accepted_here = (lambda: accepted(cat_id, factor_name)) if accepted and factor_name else None
         meta_source = match.source if match else (proposal.source if proposal.source != "mixed" else "rules")
         meta_conf = min(proposal.confidence, match.confidence) if match else proposal.confidence
         base: dict[str, Any] = {"site_id": proposal.site_id, "category_id": int(category_id), "activity_name": activity_text, "meta": {"source": meta_source, "confidence": round(meta_conf, 3)}}
@@ -136,7 +181,7 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
                 if value is None:
                     local.append(_issue(ref, activity_text or None, "VALUE_NOT_NUMERIC", "The month cell is not a number.", {**cells, "month": col}))
                     continue
-                row = {**base, "row_ref": ref, "period": {"kind": "monthly", "date": d}, "activity_unit": unit or unit_in_cell or _header_unit(sheet, col) or _title_unit(sheet) or "", "activity_value": value}
+                row = {**base, "row_ref": ref, "period": {"kind": "monthly", "date": d}, "activity_unit": pick_unit([unit, unit_in_cell, _header_unit(sheet, col), _title_unit(sheet)], accepted_here), "activity_value": value}
                 if extra:
                     row["fields"] = {**row.get("fields", {}), **extra}
                 _append(rows, local, row, activity_text, cells)
@@ -149,7 +194,7 @@ def rows_from_sheet(sheet: Sheet, proposal: SheetProposal) -> SheetRows:
         if value_col and value_text and value is None:
             local.append(_issue(row_ref, activity_text or None, "VALUE_NOT_NUMERIC", "The activity value is not a number.", cells))
             continue
-        row["activity_unit"] = unit or unit_in_cell or (_header_unit(sheet, value_col) if value_col else None) or _fields_unit(sheet, extra_cols) or _title_unit(sheet) or ""
+        row["activity_unit"] = pick_unit([unit, unit_in_cell, _header_unit(sheet, value_col) if value_col else None, _fields_unit(sheet, extra_cols), _title_unit(sheet)], accepted_here)
         if value is not None:
             row["activity_value"] = value
         if extra:
@@ -226,8 +271,9 @@ def _append(rows: list[dict], local: list[LocalIssue], row: dict, activity_text:
     rows.append(row)
 
 
-def rows_from_proposal(workbook: Workbook, proposal: MappingProposal) -> SheetRows:
-    """Every sheet's rows under the confirmed proposal, excluded sheets left out."""
+def rows_from_proposal(workbook: Workbook, proposal: MappingProposal, accepted: Optional[AcceptedUnits] = None) -> SheetRows:
+    """Every sheet's rows under the confirmed proposal, excluded sheets left out. ``accepted``
+    (category id, factor name) → accepted units settles a row whose readings disagree (#183)."""
     by_name = {s.name: s for s in workbook.sheets}
     rows: list[dict] = []
     local: list[LocalIssue] = []
@@ -240,7 +286,7 @@ def rows_from_proposal(workbook: Workbook, proposal: MappingProposal) -> SheetRo
             continue
         if sheet.fingerprint != sp.fingerprint:
             raise ValueError(f"The sheet {sp.sheet_name!r} no longer matches the confirmed mapping. Upload the file again.")
-        part = rows_from_sheet(sheet, sp)
+        part = rows_from_sheet(sheet, sp, accepted)
         rows.extend(part.rows)
         local.extend(part.local_issues)
         total += part.total_rows

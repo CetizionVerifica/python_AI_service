@@ -185,11 +185,17 @@ def _esg_lite_http_error(e: plans.EsgLiteError) -> HTTPException:
     return HTTPException(status_code=e.status, detail=e.body())
 
 
-def _sheet_rows(payload: dict, principal: Optional[Principal] = None) -> tuple[plans.SheetRows, dict]:
+def _sheet_rows(payload: dict, principal: Optional[Principal] = None, client: Optional[plans.PlanClient] = None) -> tuple[plans.SheetRows, dict]:
     """The sheet's rows as ImportRows: from a confirmed ``proposal`` (smart import, XI2)
-    or from the site, category, month and column mappings in the payload (contributor path)."""
+    or from the site, category, month and column mappings in the payload (contributor path).
+    With the caller's ``client``, a smart-import row whose unit readings disagree takes the one
+    its activity accepts (ESG-lite #183)."""
     if payload.get("proposal") is not None:
-        return mapping_api.sheet_rows_from_proposal(payload, principal)
+        company_id = None
+        if client is not None and principal is not None and principal.is_superadmin:
+            site_id = (payload.get("proposal") or {}).get("site_id")
+            company_id = company_id_for_site(int(site_id)) if isinstance(site_id, int) else None
+        return mapping_api.sheet_rows_from_proposal(payload, principal, client=client, company_id=company_id)
     site_id = int(payload.get("site_id"))
     category_id = int(payload.get("category_id"))
     date_of_reporting = str(payload.get("date_of_reporting"))
@@ -216,8 +222,8 @@ def preview(payload: dict, request: Request, principal: Principal = Depends(requ
         page_size = int(payload.get("page_size", 100))
         state = payload.get("state") or None
         code = payload.get("code") or None
-        sheet, ctx = _sheet_rows(payload, principal)
         with plans.PlanClient(_bearer(request)) as client:
+            sheet, ctx = _sheet_rows(payload, principal, client)
             plan_id = payload.get("plan_id")
             if plan_id:
                 return plans.plan_page(client, str(plan_id), page=page, page_size=page_size, state=state, code=code, local_issues=sheet.local_issues, not_selected=sheet.not_selected, sheet_rows=sheet.total_rows)
@@ -329,8 +335,8 @@ def bulk_import(payload: dict, request: Request, principal: Principal = Depends(
             raise HTTPException(status_code=409, detail="This file is already being imported.")
         raise HTTPException(status_code=409, detail="This file has already been imported. Please re-upload it to import again.")
     try:
-        sheet, ctx = _sheet_rows(payload, principal)
         with plans.PlanClient(_bearer(request)) as client:
+            sheet, ctx = _sheet_rows(payload, principal, client)
             plan_id = payload.get("plan_id")
             version = payload.get("version")
             if not plan_id:

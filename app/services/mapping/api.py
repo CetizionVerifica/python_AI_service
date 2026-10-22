@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.schemas.mapping import MAPPING_PROPOSE_PER_WINDOW, MAPPING_PROPOSE_WINDOW_MINUTES, MappingProposal
 from app.services.excel_plan_client import PlanClient, SheetRows
-from app.services.mapping.context import ActivityLookup, context_view
+from app.services.mapping.context import AcceptedUnitsLookup, ActivityLookup, context_view
 from app.services.mapping.engine import propose
 from app.services.mapping.rows import rows_from_proposal
 from app.services.workbook.reader import Workbook, read_workbook_bytes
@@ -107,7 +107,7 @@ def propose_document(
     )
 
 
-def sheet_rows_from_proposal(payload: dict, principal=None) -> tuple[SheetRows, dict]:
+def sheet_rows_from_proposal(payload: dict, principal=None, client: Optional[PlanClient] = None, company_id: Optional[int] = None) -> tuple[SheetRows, dict]:
     """``(rows, ctx)`` for ``/preview`` and ``/import`` when the payload carries a confirmed ``proposal``.
 
     The proposal's ``site_id`` must be one of the caller's sites, checked here
@@ -123,7 +123,9 @@ def sheet_rows_from_proposal(payload: dict, principal=None) -> tuple[SheetRows, 
     if proposal.document_id != document_id:
         raise ValueError("The proposal is for another document.")
     workbook, document_name = load_workbook_for(document_id)
-    sheet = rows_from_proposal(workbook, proposal)
+    # With the caller's client, a row whose unit readings disagree takes the one its activity accepts (#183).
+    accepted = AcceptedUnitsLookup(ActivityLookup(client, proposal.site_id, company_id)) if client is not None else None
+    sheet = rows_from_proposal(workbook, proposal, accepted)
     return sheet, {
         "site_id": proposal.site_id,
         "category_id": None,
