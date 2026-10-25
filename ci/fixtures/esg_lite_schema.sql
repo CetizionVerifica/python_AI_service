@@ -20,9 +20,9 @@ CREATE TYPE public.production_data_status_enum AS ENUM (
     'rejected'
 );
 CREATE TABLE public.audit_log (
-    id integer NOT NULL,
+    id bigint NOT NULL,
     entity_type character varying NOT NULL,
-    entity_id integer NOT NULL,
+    entity_id bigint NOT NULL,
     action character varying NOT NULL,
     changed_fields jsonb NOT NULL,
     reason text,
@@ -30,7 +30,6 @@ CREATE TABLE public.audit_log (
     changed_by integer
 );
 CREATE SEQUENCE public.audit_log_id_seq
-    AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -140,7 +139,7 @@ CREATE SEQUENCE public.country_country_id_seq
     CACHE 1;
 ALTER SEQUENCE public.country_country_id_seq OWNED BY public.country.country_id;
 CREATE TABLE public.emission (
-    pk_id integer NOT NULL,
+    pk_id bigint NOT NULL,
     activity_data jsonb NOT NULL,
     total_emission numeric NOT NULL,
     unit character varying NOT NULL,
@@ -153,7 +152,7 @@ CREATE TABLE public.emission (
     updated_at timestamp without time zone DEFAULT now() NOT NULL,
     reporting_period character varying(10) DEFAULT 'monthly'::character varying NOT NULL,
     year_type character varying(2),
-    fera_linked_id integer,
+    fera_linked_id bigint,
     upload_batch_id character varying,
     extra_data jsonb DEFAULT '{}'::jsonb,
     emission_factor_snapshot jsonb,
@@ -197,7 +196,7 @@ CREATE TABLE public.emission_document (
     ai_invoice_id integer,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL,
-    emission_id integer,
+    emission_id bigint,
     uploaded_by integer
 );
 CREATE SEQUENCE public.emission_document_document_id_seq
@@ -230,7 +229,6 @@ CREATE SEQUENCE public.emission_factors_emission_factor_id_seq
     CACHE 1;
 ALTER SEQUENCE public.emission_factors_emission_factor_id_seq OWNED BY public.emission_factors.emission_factor_id;
 CREATE SEQUENCE public.emission_pk_id_seq
-    AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -253,7 +251,7 @@ CREATE SEQUENCE public.emission_threshold_threshold_id_seq
     CACHE 1;
 ALTER SEQUENCE public.emission_threshold_threshold_id_seq OWNED BY public.emission_threshold.threshold_id;
 CREATE TABLE public.notification (
-    id integer NOT NULL,
+    id bigint NOT NULL,
     type character varying NOT NULL,
     title character varying NOT NULL,
     message text NOT NULL,
@@ -263,7 +261,6 @@ CREATE TABLE public.notification (
     user_id integer
 );
 CREATE SEQUENCE public.notification_id_seq
-    AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
