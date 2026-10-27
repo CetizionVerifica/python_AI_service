@@ -308,6 +308,29 @@ def test_an_adapter_bug_is_not_a_failed_import():
     p, s = run("07-months-as-columns.xlsx", Broken())
     _, rules = run("07-months-as-columns.xlsx", None)
     assert p.model.calls == 1 and s.model_dump(exclude={"source"}) == rules.model_dump(exclude={"source"})
+    assert p.model.error == "KeyError"
+
+
+def test_a_failed_call_names_the_provider_status_not_its_message():
+    class Status402(Exception):
+        status_code = 402
+
+    class NoCredit(FakeModel):
+        def propose(self, system, user):
+            try:
+                raise Status402("Insufficient credits: secret request text")
+            except Status402 as e:
+                raise ModelError("The mapping model gave no usable answer.") from e
+
+    p, _ = run("07-months-as-columns.xlsx", NoCredit())
+    assert p.model.calls == 1 and p.model.error == "http_402"
+    assert "secret" not in p.model_dump_json()
+    MappingProposal.model_validate(p.model_dump())
+
+
+def test_a_good_answer_and_no_call_carry_no_error():
+    p, _ = run("12-large-ledger.csv", FakeModel())
+    assert p.model.error is None and "error" not in p.model_dump(exclude_none=True)["model"]
 
 
 def test_a_prompt_over_budget_is_not_sliced_and_makes_no_call(monkeypatch):

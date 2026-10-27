@@ -41,6 +41,7 @@ def propose(
     sheets = []
     profile_hits = 0
     calls = 0
+    model_error: Optional[str] = None
     chosen_by_sheet = sheet_categories or {}
     for sheet in workbook.readable_sheets:
         if only_sheets is not None and sheet.name not in only_sheets:
@@ -62,7 +63,9 @@ def propose(
 
         rules_only = draft.to_proposal()
         try:
-            calls += llm_layer(draft, activities, model)
+            sheet_calls, sheet_error = llm_layer(draft, activities, model)
+            calls += sheet_calls
+            model_error = sheet_error or model_error
             # The model may have found the quantity only now.
             quantity_fields(draft)
             sheet_proposal = draft.to_proposal()
@@ -70,13 +73,16 @@ def propose(
         except Exception as e:  # a model answer the contract refuses: this sheet keeps the profile and rules result
             logger.warning(f"propose document={document_id} sheet={sheet.index}: model answer dropped ({type(e).__name__})")
             calls = max(calls, 1)
+            model_error = "answer_dropped"
             sheet_proposal = rules_only
         sheets.append(sheet_proposal)
     if not sheets:
         raise ValueError("None of the named sheets can be read in this workbook.")
     telemetry = {"name": str(getattr(model, "name", "none"))[:100] if model is not None else "none", "calls": calls, "cached_profile_hits": profile_hits}
+    if model_error:
+        telemetry["error"] = model_error
     proposal = MappingProposal.model_validate({"document_id": int(document_id), "site_id": ctx.site_id, "sheets": sheets, "model": telemetry})
-    logger.info(f"propose document={document_id} site={ctx.site_id} sheets={len(sheets)} profile_hits={profile_hits} model_calls={calls}")
+    logger.info(f"propose document={document_id} site={ctx.site_id} sheets={len(sheets)} profile_hits={profile_hits} model_calls={calls} model_error={model_error}")
     return proposal
 
 

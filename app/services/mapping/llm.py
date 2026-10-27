@@ -32,25 +32,44 @@ def _conf(value) -> float:
     return max(0.0, min(LLM_MAX_CONFIDENCE, v))
 
 
-def llm_layer(draft: Draft, activities: ActivityLookup, model: MappingModel) -> int:
-    """Ask the model for the sheet's unresolved parts. Returns the number of calls (0 or 1)."""
+def llm_layer(draft: Draft, activities: ActivityLookup, model: MappingModel) -> tuple[int, Optional[str]]:
+    """Ask the model for the sheet's unresolved parts. Returns the number of
+    calls (0 or 1) and, when the call gave no usable answer, an error code."""
     if not needed_parts(draft):
-        return 0
+        return 0, None
     prompt = build_prompt(draft, activities)
     if prompt is None:
         logger.warning(f"mapping model skipped for sheet {draft.sheet.index}: the prompt does not fit the budget")
-        return 0
+        return 0, None
     system, user = prompt
     try:
         answer = model.propose(system, user)
     except ModelError as e:
-        logger.warning(f"mapping model gave no answer for sheet {draft.sheet.index}: {e}")
-        return 1
+        code = error_code(e)
+        logger.warning(f"mapping model gave no answer for sheet {draft.sheet.index}: {e} ({code})")
+        return 1, code
     except Exception as e:  # an adapter bug or an SDK error it did not map: the rules result stands
         logger.warning(f"mapping model failed for sheet {draft.sheet.index}: {type(e).__name__}")
-        return 1
+        return 1, error_code(e)
     apply_answer(draft, answer, activities)
-    return 1
+    return 1, None
+
+
+def error_code(e: BaseException) -> str:
+    """A short code for a failed model call: the HTTP status of the provider's
+    answer when there is one (``http_402``), else the type of the first error
+    under the ``ModelError`` wrapper. Never the error's message, which can
+    echo the request."""
+    cause = e
+    while isinstance(cause, ModelError) and cause.__cause__ is not None:
+        cause = cause.__cause__
+    seen = cause
+    while seen is not None:
+        status = getattr(seen, "status_code", None)
+        if isinstance(status, int):
+            return f"http_{status}"
+        seen = seen.__cause__
+    return type(cause).__name__[:60]
 
 
 def _taken_columns(draft: Draft) -> set[str]:

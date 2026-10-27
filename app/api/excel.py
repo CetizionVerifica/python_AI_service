@@ -300,7 +300,8 @@ def propose(payload: dict, request: Request, principal: Principal = Depends(requ
                 client, document_id=document_id, site_id=site_id, company_id=company_id,
                 sheet_categories=sheet_categories, only_sheets=only_sheets,
             )
-        return proposal.model_dump()
+        # model.error appears only when a model call failed.
+        return proposal.model_dump(exclude={"model": {"error"}} if proposal.model and proposal.model.error is None else None)
     except HTTPException:
         raise
     except plans.EsgLiteError as e:
